@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Rusty Boss
+Comment=Independent experimental Katana Gen 3 editor and librarian
+Exec=rusty-boss
+Icon=rusty-boss
+Terminal=false
+Categories=AudioVideo;Audio;Midi;
+Keywords=Katana;Guitar;MIDI;
