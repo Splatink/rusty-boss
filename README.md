@@ -65,6 +65,10 @@ Offline GUI without MIDI: `cargo run --no-default-features --features gui`.
   nonsequential option mappings and explicit recovered units where known. MOD/FX
   pages follow the selected algorithm and green/red/yellow bank. Unknown formats
   stay numeric; browsing does not reset hidden parameters.
+- **Panel-position snapshots:** separate read-only booster/MOD/FX/delay/reverb
+  macro readouts, with unavailable values shown as a dash. A panel position of
+  50 is **not necessarily** an algorithm Effect Level of 50. These values refresh
+  on a patch read, not continuously. See [the investigation](docs/PANEL-VALUES.md).
 - **Signal chain:** nine original patterns, pedal/SR/EQ position selectors and a
   clickable ordered diagram (54 base / 216 full routing combinations). No drag/drop.
 - Basic model visibility for Bloom and Artist solo delay; offline model preview.
@@ -83,7 +87,24 @@ Offline GUI without MIDI: `cargo run --no-default-features --features gui`.
   IDs and complete byte coverage. I/O is paced and runs on a worker thread.
   Failed reads are not published as completed snapshots.
 
-Screenshots: [amp panel](docs/screenshots/editor.png) · [MOD/chorus editor](docs/screenshots/mod.png).
+Screenshots: [amp panel](docs/screenshots/editor.png) · [MOD/chorus editor](docs/screenshots/mod.png) · [reverb editor](docs/screenshots/reverb.png).
+The refreshed Standard layout uses effect cards, larger ticked controls and
+collapsible secondary amp settings; the technical view is still available.
+
+## Strictly read-only hardware diagnostic
+
+```sh
+./target/release/rusty-boss ports
+./target/release/rusty-boss read-reverb --port hw:3,0,0 > reverb-read.json
+```
+
+Use your actual port from `ports`. This bounded probe sends only identity/RQ1
+requests, never enters editor mode, never selects a channel, and rejects **all**
+DT1 writes—including setup and cleanup—at the transport. It prints raw packets,
+read blocks and separate reverb panel/level values; there are no retries.
+It is distinct from the GUI's protected editor connection, which permits
+editor-mode setup/cleanup. The user-authorized read-only KATANA-50 observation
+and its limits are documented in [Panel values](docs/PANEL-VALUES.md).
 
 ## Desktop workflow
 

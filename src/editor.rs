@@ -183,6 +183,23 @@ impl Catalog {
         chain.push("speaker".into());
         Ok(chain)
     }
+    /// Last-read panel macro position, NOT an algorithm's effect level. The
+    /// shipped watcher uses a +1 wire bias; zero on the wire means unavailable.
+    /// Kept read-only: editing a TEMP knob has coordinated firmware side effects.
+    pub fn panel_position(&self, s: &Schema, set: &ParamSet, section: Section) -> Option<i32> {
+        let offset = match section {
+            Section::Booster => 0,
+            Section::Mod => 1,
+            Section::Fx => 2,
+            Section::Delay => 3,
+            Section::Reverb => 4,
+            _ => return None,
+        };
+        let b = s.block("PATCH%PATCH_KNOB_READONLY").ok()?;
+        let p = b.parameters.iter().find(|p| p.offset == offset)?;
+        let value = p.decode_number(set.get(&b.id)?).ok()?;
+        (0..=100).contains(&value).then_some(value)
+    }
     pub fn enabled(&self, id: &str, s: &Schema, set: &ParamSet, bank: usize) -> bool {
         let val = |key: &str| {
             self.control(key)

@@ -62,6 +62,32 @@ impl WriteGate {
         }
     }
 }
+/// Absolute no-write transport for hardware diagnostics. Unlike the GUI's
+/// protected editor mode, this has NO editor-mode or cleanup exception and no
+/// permission switch. Every DT1, program change and unrecognized frame fails
+/// before reaching the underlying transport.
+pub struct ReadRequestsOnly<T: Transport> {
+    inner: T,
+}
+impl<T: Transport> ReadRequestsOnly<T> {
+    pub fn new(inner: T) -> Self {
+        Self { inner }
+    }
+}
+impl<T: Transport> Transport for ReadRequestsOnly<T> {
+    fn send(&mut self, frame: &[u8]) -> Result<()> {
+        ensure!(
+            frame == IDENTITY_REQUEST
+                || matches!(Message::decode(frame), Ok(Message::Request { .. })),
+            "Strict read-only diagnostics: only identity and RQ1 permitted; ALL writes blocked"
+        );
+        self.inner.send(frame)
+    }
+    fn receive(&mut self, timeout: Duration) -> Result<Option<Vec<u8>>> {
+        self.inner.receive(timeout)
+    }
+}
+
 pub struct Guarded<T: Transport> {
     inner: T,
     gate: WriteGate,
@@ -114,6 +140,41 @@ mod tests {
         }
         .encode()
         .unwrap()
+    }
+    #[test]
+    fn strict_observer_rejects_all_writes_before_transport() {
+        struct Sink(usize);
+        impl Transport for Sink {
+            fn send(&mut self, _: &[u8]) -> Result<()> {
+                self.0 += 1;
+                Ok(())
+            }
+            fn receive(&mut self, _: Duration) -> Result<Option<Vec<u8>>> {
+                Ok(None)
+            }
+        }
+        let mut t = ReadRequestsOnly::new(Sink(0));
+        for address in [
+            0x7f000001, 0x20000600, 0x20100000, 0x30000204, 0x7f000100, 0x7f000104, 0x7f010109,
+        ] {
+            for value in [0, 1, 50] {
+                assert!(t.send(&dt(address, vec![value])).is_err());
+            }
+        }
+        for frame in [&[0xc0, 1][..], &[0xb0, 1, 50][..], &[0xf0, 1, 0xf7][..]] {
+            assert!(t.send(frame).is_err());
+        }
+        assert_eq!(t.inner.0, 0);
+        t.send(&IDENTITY_REQUEST).unwrap();
+        let rq = Message::Request {
+            device: 16,
+            address: Address::packed(0x20011c00).unwrap(),
+            size: 5,
+        }
+        .encode()
+        .unwrap();
+        t.send(&rq).unwrap();
+        assert_eq!(t.inner.0, 2);
     }
     #[test]
     fn readonly_allows_reads_and_session_mode_only() {

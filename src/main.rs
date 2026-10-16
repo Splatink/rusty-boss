@@ -35,6 +35,12 @@ enum Command {
     },
     /// Print a checked RQ1 packet without sending it; address is packed hex
     Request { address: String, size: u32 },
+    /// Strict read-only reverb diagnostic; no editor-mode setup or any DT1 writes
+    ReadReverb {
+        /// Explicit ALSA raw MIDI port from `ports`
+        #[arg(long)]
+        port: String,
+    },
     /// List duplex ALSA raw MIDI ports (never auto-connects)
     Ports,
 }
@@ -126,6 +132,27 @@ fn main() -> Result<()> {
                     .collect::<Vec<_>>()
                     .join(" ")
             );
+        }
+        Command::ReadReverb { port } => {
+            #[cfg(feature = "midi")]
+            {
+                let transport = rusty_boss::midi::AlsaTransport::open(
+                    &port,
+                    std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+                )?;
+                let mut report =
+                    rusty_boss::diagnostics::reverb_snapshot(transport, &Schema::load());
+                report["port"] = serde_json::Value::String(port);
+                println!("{}", serde_json::to_string_pretty(&report)?);
+                if !report["error"].is_null() {
+                    bail!("Read-only probe incomplete; see the JSON report (no writes attempted)");
+                }
+            }
+            #[cfg(not(feature = "midi"))]
+            {
+                let _ = port;
+                bail!("build with --features midi for ALSA support");
+            }
         }
         Command::Ports => {
             #[cfg(feature = "midi")]

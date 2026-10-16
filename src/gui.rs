@@ -239,9 +239,40 @@ struct App {
 }
 impl App {
     fn new(ctx: &egui::Context) -> Self {
-        ctx.set_visuals(egui::Visuals::dark());
         let mut style = (*ctx.style()).clone();
-        style.spacing.item_spacing = egui::vec2(10., 8.);
+        style.visuals = egui::Visuals::dark();
+        let v = &mut style.visuals;
+        v.panel_fill = Color32::from_rgb(19, 22, 27);
+        v.window_fill = Color32::from_rgb(27, 31, 38);
+        v.extreme_bg_color = Color32::from_rgb(14, 17, 21);
+        v.faint_bg_color = Color32::from_rgb(32, 37, 44);
+        v.override_text_color = Some(Color32::from_rgb(218, 222, 229));
+        v.selection.bg_fill = Color32::from_rgb(91, 61, 39);
+        v.selection.stroke = egui::Stroke::new(1_f32, Color32::from_rgb(245, 170, 91));
+        for w in [
+            &mut v.widgets.inactive,
+            &mut v.widgets.hovered,
+            &mut v.widgets.active,
+        ] {
+            w.corner_radius = egui::CornerRadius::same(6);
+        }
+        v.widgets.inactive.bg_fill = Color32::from_rgb(37, 43, 52);
+        v.widgets.inactive.weak_bg_fill = Color32::from_rgb(29, 34, 41);
+        v.widgets.inactive.bg_stroke = egui::Stroke::new(1_f32, Color32::from_rgb(53, 61, 72));
+        v.widgets.hovered.bg_fill = Color32::from_rgb(52, 59, 69);
+        v.widgets.hovered.weak_bg_fill = Color32::from_rgb(43, 49, 58);
+        style.spacing.item_spacing = egui::vec2(10., 10.);
+        style.spacing.button_padding = egui::vec2(12., 7.);
+        style.spacing.interact_size.y = 30.;
+        style
+            .text_styles
+            .insert(egui::TextStyle::Body, egui::FontId::proportional(14.));
+        style
+            .text_styles
+            .insert(egui::TextStyle::Button, egui::FontId::proportional(13.));
+        style
+            .text_styles
+            .insert(egui::TextStyle::Heading, egui::FontId::proportional(23.));
         ctx.set_style(style);
         let schema = Schema::load();
         let write_gate = WriteGate::default();
@@ -426,54 +457,84 @@ impl App {
         }
     }
     fn header(&mut self, ctx: &egui::Context) {
-        egui::TopBottomPanel::top("header").show(ctx, |ui| {
-            ui.horizontal(|ui| {
-                ui.heading(RichText::new("RUSTY BOSS").color(Color32::from_rgb(236, 143, 65)));
-                ui.label("KATANA Gen 3  •  experimental");
-                ui.separator();
-                ui.label(self.connected.as_ref().map(|i| i.name).unwrap_or("OFFLINE"));
-                if self.dirty {
-                    ui.colored_label(Color32::YELLOW, "Unsaved local changes");
-                }
-            });
-            ui.horizontal_wrapped(|ui| {
-                for (p, label) in [
-                    (Page::Editor, "Editor"),
-                    (Page::Librarian, "Librarian"),
-                    (Page::System, "System"),
-                    (Page::Backup, "Backup"),
-                    (Page::Connection, "Connection"),
-                    (Page::About, "About / evidence"),
-                ] {
-                    if ui.selectable_label(self.page == p, label).clicked() {
-                        self.page = p;
-                        self.live = false;
-                        self.filter.clear();
-                        self.block = if p == Page::System {
-                            "SYSTEM%COM"
-                        } else {
-                            "PATCH%AMP"
+        egui::TopBottomPanel::top("header")
+            .frame(
+                egui::Frame::new()
+                    .fill(Color32::from_rgb(23, 27, 33))
+                    .inner_margin(egui::Margin::symmetric(20, 12)),
+            )
+            .show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label(
+                        RichText::new("RUSTY BOSS")
+                            .size(22.)
+                            .strong()
+                            .color(Color32::from_rgb(245, 170, 91)),
+                    );
+                    ui.label(RichText::new("/  KATANA Gen 3").size(13.).weak());
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        ui.label(
+                            RichText::new(
+                                self.connected
+                                    .as_ref()
+                                    .map(|i| i.name)
+                                    .unwrap_or("OFFLINE  ·  LOCAL EDITOR"),
+                            )
+                            .size(12.)
+                            .color(if self.connected.is_some() {
+                                Color32::from_rgb(98, 203, 151)
+                            } else {
+                                Color32::from_gray(150)
+                            }),
+                        );
+                        if self.dirty {
+                            ui.label(
+                                RichText::new("● Unsaved")
+                                    .size(12.)
+                                    .color(Color32::from_rgb(245, 170, 91)),
+                            );
                         }
-                        .into();
+                    });
+                });
+                ui.add_space(4.);
+                ui.horizontal_wrapped(|ui| {
+                    for (p, label) in [
+                        (Page::Editor, "Editor"),
+                        (Page::Librarian, "Librarian"),
+                        (Page::System, "System"),
+                        (Page::Backup, "Backup"),
+                        (Page::Connection, "Connection"),
+                        (Page::About, "About / evidence"),
+                    ] {
+                        if ui.selectable_label(self.page == p, label).clicked() {
+                            self.page = p;
+                            self.live = false;
+                            self.filter.clear();
+                            self.block = if p == Page::System {
+                                "SYSTEM%COM"
+                            } else {
+                                "PATCH%AMP"
+                            }
+                            .into();
+                        }
                     }
-                }
-                ui.separator();
-                if self.page == Page::Editor {
-                    let before = self.expert;
-                    ui.selectable_value(&mut self.expert, false, "Standard");
-                    ui.selectable_value(&mut self.expert, true, "Advanced raw");
-                    if before != self.expert {
-                        self.disarm();
+                    ui.separator();
+                    if self.page == Page::Editor {
+                        let before = self.expert;
+                        ui.selectable_value(&mut self.expert, false, "Standard");
+                        ui.selectable_value(&mut self.expert, true, "Advanced raw");
+                        if before != self.expert {
+                            self.disarm();
+                        }
                     }
-                }
+                });
             });
-        });
         egui::TopBottomPanel::bottom("status").show(ctx, |ui| {
             ui.horizontal(|ui| {
                 if self.busy {
                     ui.spinner();
                 }
-                ui.label(&self.status);
+                ui.label(RichText::new(&self.status).size(12.).weak());
                 #[cfg(feature = "midi")]
                 if self.busy && ui.button("Cancel").clicked() {
                     self.worker.cancel.store(true, Ordering::Relaxed);
@@ -1220,6 +1281,38 @@ mod tests {
         }
         assert!(app.pending_edits.is_empty());
         assert!(!app.dirty && !app.live && app.connected.is_none());
+    }
+    #[test]
+    fn responsive_standard_layout_keeps_unknown_panel_data_untouched() {
+        let ctx = egui::Context::default();
+        let mut app = App::new(&ctx);
+        app.library.data[0][0]
+            .parameters
+            .get_mut("PATCH%PATCH_KNOB_READONLY")
+            .unwrap()[4] = 127;
+        let before = app.library.data[0][0].parameters.clone();
+        for (width, height) in [(800., 560.), (1180., 800.), (1600., 1000.)] {
+            for section in Section::ALL {
+                app.section = section;
+                let out = ctx.run(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(width, height),
+                        )),
+                        ..Default::default()
+                    },
+                    |ctx| {
+                        app.header(ctx);
+                        app.editor(ctx, false);
+                    },
+                );
+                assert!(!out.shapes.is_empty());
+                assert_eq!(app.library.data[0][0].parameters, before);
+            }
+        }
+        assert!(app.pending_edits.is_empty());
+        assert!(!app.dirty);
     }
     #[test]
     fn queued_edits_coalesce_by_field_and_disarming_drops_them() {

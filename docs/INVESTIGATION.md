@@ -243,6 +243,20 @@ new Evidence IDs, source scope, implementation choices and remaining unknowns.
 The earlier generic-editor limitations above describe the initial milestone;
 the raw view is now the Advanced fallback, not the default UI.
 
+### 9. Panel-position / effect-level distinction and presentation refinement
+
+The user reports live-buffer editing and amp preset loading work, but reverb
+strength did not match the physical knob. The focused continuation found separate
+read-only panel-macro positions and writable algorithm levels; it did **not**
+establish a universal scale conversion. After subsequent explicit read-only
+authorization, a no-DT1 diagnostic observed KATANA-50 panel position 52 with active
+red SPRING Effect Level 68 and PRESET assignment. It did not measure the physical
+knob angle or reproduce the exact earlier 50 reading.
+[Panel values](PANEL-VALUES.md) records the new REA IDs, exact bindings, tests,
+visual changes and outstanding device-validation question. The editor now shows
+both concepts separately. The GUI read path is unchanged. The separate bounded
+diagnostic sent only identity/RQ1 reads; no write permission was granted or used.
+
 ## Validation and continuation
 
 Locally run: full/default and headless core Rust tests, headless egui rendering of
@@ -252,8 +266,10 @@ in the initial pass. The UI continuation did not enumerate or access the attache
 amplifier; it added algorithm/bank invariance, routing, display and write-gate tests.
 `docs/VALIDATION.md` records final commands/results.
 
-The principal unresolved boundary is real device behavior. Exact model, firmware,
-known-good vendor exports and bounded MIDI recordings are needed to continue.
+The principal unresolved boundary remains broader real device behavior. A focused
+read-only KATANA-50 reverb exchange is now retained; firmware, known-good vendor
+exports and broader bounded recordings are still needed. The user's no-write
+restriction applies to all further agent hardware testing.
 Do not infer complete application reconstruction or safe device writes from this
 static evidence or these tests. The active REA archive session is closed after the
 final Evidence export; no provider database was needed or left open.

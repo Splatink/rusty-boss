@@ -56,7 +56,12 @@ pub struct Session<T: Transport> {
     active: bool,
 }
 impl<T: Transport> Session<T> {
-    pub fn connect(mut transport: T) -> Result<Self> {
+    /// Strict observation: identity and RQ1 only, no editor-mode setup or cleanup.
+    /// Even accidentally calling a write method is blocked at the transport.
+    pub fn observe(transport: T) -> Result<Session<crate::safety::ReadRequestsOnly<T>>> {
+        Session::identify(crate::safety::ReadRequestsOnly::new(transport))
+    }
+    fn identify(mut transport: T) -> Result<Self> {
         transport.send(&IDENTITY_REQUEST)?;
         let deadline = Instant::now() + Duration::from_secs(5);
         let identity = loop {
@@ -70,12 +75,15 @@ impl<T: Transport> Session<T> {
                 }
             }
         };
-        let mut s = Self {
+        Ok(Self {
             transport,
             identity,
             timeout: Duration::from_secs(15),
             active: false,
-        };
+        })
+    }
+    pub fn connect(transport: T) -> Result<Self> {
+        let mut s = Self::identify(transport)?;
         let level = s.read(Address::packed(0x7f000000)?, 1)?;
         ensure!(
             level == [1],

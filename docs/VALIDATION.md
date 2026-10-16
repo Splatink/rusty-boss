@@ -7,8 +7,8 @@ not execution/behavioral equivalence of the original application.
 | Check | Result |
 |---|---|
 | `cargo fmt --check` (after formatting) | Passed |
-| `cargo test --locked` | **38 passed**: 28 unit/UI + 10 integration tests |
-| `cargo test --locked --no-default-features` | **35 passed**: 25 unit + 10 integration tests |
+| `cargo test --locked` | **45 passed**: 31 unit/UI + 14 integration tests |
+| `cargo test --locked --no-default-features` | **41 passed**: 27 unit + 14 integration tests |
 | `cargo clippy --all-targets -- -D warnings` | Passed |
 | `cargo clippy --no-default-features --features gui --all-targets -- -D warnings` | Passed |
 | `cargo build --locked` | Passed |
@@ -18,7 +18,8 @@ not execution/behavioral equivalence of the original application.
 | CLI `new` + `inspect` constructed Gen 3 TSL | Passed |
 | CLI `request 20000000 16` | Correct expected RQ1 bytes; not transmitted |
 | CLI `ports` (initial milestone only) | No duplex raw MIDI ports then; not repeated with the user\'s now-connected amp |
-| Original app execution, real TSL/ALB interoperability, USB-MIDI/audio/device writes | **Not independently tested**; user reports initial implementation works, without a captured model/firmware/traffic regression fixture |
+| Strict read-only USB-MIDI reverb probe | Passed on KATANA-50 after explicit user authorization: panel 52, active red SPRING level 68, PRESET assignment; 1 identity + 8 RQ1, **0 DT1 writes**. Retained fixture in `tests/fixtures/` |
+| Original app execution, real TSL/ALB interoperability, audio/device writes | **Not independently tested**; user reports live buffer and preset loading work. All agent hardware testing is now restricted to reads, never writes |
 
 Run the repeatable local checks with `bash tools/check.sh`. To include the desktop
 smoke test on a display-enabled host, use
@@ -47,6 +48,17 @@ smoke test on a display-enabled host, use
 - All 951 numeric bindings resolve, reachable finite UI options encode and
   round-trip without touching neighboring bytes; formatted numeric entry inverts
   the known unit rules.
+- Strict observation transport rejects all DT1 (including editor setup/cleanup),
+  program/control changes and unknown packets before the sink. Probe mock verifies
+  exactly one identity and eight RQ1s, with no implicit cleanup write.
+- Real KATANA-50 read-only fixture: selected red SPRING, panel 52, level 68 and
+  PRESET assignment; recorded outgoing packet types and incoming checksums checked.
+- Panel-position regression: separate macro 50 / algorithm level 68, +1 wire bias,
+  unavailable sentinel, invalid/missing/short data and read-only watcher policy.
+- All Standard sections also render at 800×560, 1180×800 and 1600×1000 without
+  modifying unknown panel bytes or enqueueing writes. These are render tests, not
+  full automated layout/usability assertions. Offline desktop screenshots were
+  checked at 1180×800; an overflowing centered-knob layout found there was corrected.
 - All 216 chain + pedal/SR/EQ-position combinations have the same unique nodes.
 - Preset-protection gate rejects tone/slot/system/command writes while protected;
   temporary mode still rejects stored and export/reset writes. Mock sink proves
@@ -54,9 +66,10 @@ smoke test on a display-enabled host, use
   cleanup of a mute sent by that transport.
 - Pending edits coalesce by parameter; disarming drops the unsent queue.
 
-The golden fixtures are derived from static source observations, not captured
-hardware traffic. The mock protocol tests do not prove the amplifier accepts or
-acknowledges these requests. The GUI smoke test proves startup/render/normal exit,
+Protocol golden fixtures are derived from static source observations. The separate
+KATANA-50 reverb fixture is captured hardware traffic from our strict read-only
+probe; it establishes only that focused read slice. Other mock protocol tests do
+not prove the amplifier accepts or acknowledges their requests. The GUI smoke test proves startup/render/normal exit,
 not all interactions. Sequential backup reads are not an atomic snapshot.
 
 Command logs remain in the parent workspace's `analysis/` directory. Detailed
