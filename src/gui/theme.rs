@@ -23,21 +23,36 @@ impl Theme {
     }
     pub fn accent(self) -> Color32 {
         match self {
-            Self::Justice => Color32::from_rgb(100, 86, 148),
+            // Pale green is used for fills; text/knob accents need contrast on white.
+            Self::Justice => Color32::from_rgb(43, 101, 68),
             Self::Kill => Color32::from_rgb(245, 79, 91),
-            Self::Puppet => Color32::from_rgb(244, 161, 85),
-            Self::Lightning => Color32::from_rgb(62, 195, 255),
+            Self::Puppet => Color32::from_rgb(244, 166, 94),
+            Self::Lightning => Color32::from_rgb(137, 183, 234),
+        }
+    }
+    fn selection_accent(self) -> Color32 {
+        match self {
+            Self::Lightning => Color32::from_rgb(185, 149, 240),
+            _ => self.accent(),
+        }
+    }
+    fn selection_fill(self) -> Color32 {
+        match self {
+            Self::Justice => Color32::from_rgb(193, 223, 199),
+            Self::Kill => Color32::from_rgb(60, 24, 33),
+            Self::Puppet => Color32::from_rgb(87, 58, 36),
+            Self::Lightning => Color32::from_rgb(58, 47, 86),
         }
     }
     pub fn apply(self, ctx: &egui::Context) {
         let light = self == Self::Justice;
         let (background, surface, raised, text, border) = match self {
             Self::Justice => (
-                (239, 238, 243),
-                (252, 251, 254),
-                (227, 225, 234),
-                (43, 40, 54),
-                (194, 190, 207),
+                (244, 248, 242),
+                (254, 255, 252),
+                (227, 237, 226),
+                (34, 48, 39),
+                (186, 206, 187),
             ),
             Self::Kill => (
                 (24, 15, 20),
@@ -47,18 +62,18 @@ impl Theme {
                 (81, 47, 59),
             ),
             Self::Puppet => (
-                (20, 22, 27),
-                (29, 32, 39),
-                (43, 47, 56),
-                (230, 229, 228),
-                (64, 66, 75),
+                (26, 21, 19),
+                (39, 31, 27),
+                (58, 45, 36),
+                (239, 230, 216),
+                (85, 66, 51),
             ),
             Self::Lightning => (
-                (11, 20, 34),
-                (19, 31, 49),
-                (28, 47, 69),
-                (219, 238, 252),
-                (43, 73, 99),
+                (17, 19, 33),
+                (27, 39, 58),
+                (44, 59, 82),
+                (226, 235, 247),
+                (76, 94, 124),
             ),
         };
         let rgb = |(r, g, b)| Color32::from_rgb(r, g, b);
@@ -73,10 +88,8 @@ impl Theme {
         v.extreme_bg_color = rgb(background);
         v.faint_bg_color = rgb(surface);
         v.override_text_color = Some(rgb(text));
-        v.selection.bg_fill = self
-            .accent()
-            .gamma_multiply(if light { 0.18 } else { 0.28 });
-        v.selection.stroke = Stroke::new(1_f32, self.accent());
+        v.selection.bg_fill = self.selection_fill();
+        v.selection.stroke = Stroke::new(1_f32, self.selection_accent());
         v.hyperlink_color = self.accent();
         v.window_stroke = Stroke::new(1_f32, rgb(border));
         v.widgets.noninteractive.bg_fill = rgb(surface);
@@ -94,8 +107,22 @@ impl Theme {
             w.bg_stroke = Stroke::new(1_f32, rgb(border));
             w.fg_stroke = Stroke::new(1_f32, rgb(text));
         }
-        v.widgets.hovered.bg_stroke = Stroke::new(1_f32, self.accent());
-        v.widgets.active.bg_stroke = Stroke::new(1.5_f32, self.accent());
+        // Carry the palette into interaction states, not just the page background.
+        let hover = match self {
+            Self::Justice => Color32::from_rgb(216, 234, 217),
+            Self::Kill => Color32::from_rgb(65, 34, 44),
+            Self::Puppet => Color32::from_rgb(73, 52, 38),
+            Self::Lightning => Color32::from_rgb(52, 61, 91),
+        };
+        v.widgets.hovered.bg_fill = hover;
+        v.widgets.hovered.weak_bg_fill = hover;
+        v.widgets.hovered.bg_stroke = Stroke::new(1_f32, self.selection_accent());
+        v.widgets.active.bg_fill = self.selection_fill();
+        v.widgets.active.weak_bg_fill = self.selection_fill();
+        v.widgets.active.bg_stroke = Stroke::new(1.5_f32, self.selection_accent());
+        v.widgets.open.bg_fill = self.selection_fill();
+        v.widgets.open.weak_bg_fill = self.selection_fill();
+        v.widgets.open.bg_stroke = Stroke::new(1_f32, self.selection_accent());
         style.visuals = v;
         style.spacing.item_spacing = egui::vec2(10., 10.);
         style.spacing.button_padding = egui::vec2(12., 7.);
@@ -140,10 +167,104 @@ mod tests {
         for theme in Theme::ALL {
             theme.apply(&ctx);
             assert_eq!(ctx.style().visuals.dark_mode, theme != Theme::Justice);
-            assert_eq!(ctx.style().visuals.selection.stroke.color, theme.accent());
+            assert_eq!(
+                ctx.style().visuals.selection.stroke.color,
+                theme.selection_accent()
+            );
             let v = &ctx.style().visuals;
             let luminance = |c: Color32| (c.r() as i32 + c.g() as i32 + c.b() as i32) / 3;
             assert!((luminance(v.text_color()) - luminance(v.panel_fill)).abs() > 130);
+        }
+    }
+    #[test]
+    fn palettes_follow_the_requested_green_blue_purple_and_copper_directions() {
+        let ctx = egui::Context::default();
+        Theme::Lightning.apply(&ctx);
+        let v = ctx.style().visuals.clone();
+        let blue = Theme::Lightning.accent();
+        let purple = v.selection.stroke.color;
+        assert!(blue.b() > blue.g() && blue.g() > blue.r());
+        assert!(purple.b() > purple.r() && purple.r() > purple.g());
+        assert_ne!(blue, purple);
+        assert_eq!(v.widgets.active.bg_stroke.color, purple);
+        assert_eq!(v.widgets.hovered.bg_stroke.color, purple);
+
+        // Switching to Justice must not retain Lightning's purple interaction colours.
+        Theme::Justice.apply(&ctx);
+        let v = ctx.style().visuals.clone();
+        assert!(!v.dark_mode);
+        assert!(v.window_fill.r() >= 250 && v.window_fill.g() >= 250 && v.window_fill.b() >= 250);
+        for fill in [
+            v.selection.bg_fill,
+            v.widgets.hovered.bg_fill,
+            v.widgets.active.bg_fill,
+            v.widgets.open.bg_fill,
+        ] {
+            assert!(fill.r() >= 180 && fill.g() > fill.r() && fill.g() > fill.b());
+        }
+        for ink in [
+            v.selection.stroke.color,
+            v.widgets.hovered.bg_stroke.color,
+            v.hyperlink_color,
+        ] {
+            assert!(ink.g() > ink.r() && ink.g() > ink.b());
+        }
+
+        Theme::Puppet.apply(&ctx);
+        let v = ctx.style().visuals.clone();
+        for surface in [
+            v.panel_fill,
+            v.window_fill,
+            v.widgets.inactive.bg_fill,
+            v.widgets.hovered.bg_fill,
+            v.widgets.active.bg_fill,
+            v.widgets.open.bg_fill,
+            v.widgets.noninteractive.bg_stroke.color,
+        ] {
+            assert!(
+                surface.r() > surface.g() && surface.g() > surface.b(),
+                "Puppet must carry warm copper/earth tones through all surfaces"
+            );
+        }
+    }
+    #[test]
+    fn text_and_selection_accents_have_readable_contrast() {
+        fn luminance(c: Color32) -> f32 {
+            let linear = |n: u8| {
+                let v = n as f32 / 255.;
+                if v <= 0.04045 {
+                    v / 12.92
+                } else {
+                    ((v + 0.055) / 1.055).powf(2.4)
+                }
+            };
+            0.2126 * linear(c.r()) + 0.7152 * linear(c.g()) + 0.0722 * linear(c.b())
+        }
+        fn contrast(a: Color32, b: Color32) -> f32 {
+            let a = luminance(a);
+            let b = luminance(b);
+            (a.max(b) + 0.05) / (a.min(b) + 0.05)
+        }
+        let ctx = egui::Context::default();
+        for theme in Theme::ALL {
+            theme.apply(&ctx);
+            let v = ctx.style().visuals.clone();
+            for bg in [
+                v.panel_fill,
+                v.window_fill,
+                v.widgets.inactive.bg_fill,
+                v.widgets.hovered.bg_fill,
+            ] {
+                assert!(contrast(v.text_color(), bg) >= 4.5, "{theme:?} body text");
+            }
+            assert!(
+                contrast(theme.accent(), v.window_fill) >= 4.5,
+                "{theme:?} accent text"
+            );
+            assert!(
+                contrast(v.selection.stroke.color, v.selection.bg_fill) >= 4.5,
+                "{theme:?} selection"
+            );
         }
     }
     #[test]

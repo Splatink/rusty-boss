@@ -989,7 +989,7 @@ impl App {
                 }
             }
         });
-        ui.small("Puppet · warm orange    Justice · pearl light    Kill · crimson    Lightning · plasma blue");
+        ui.small("Puppet · copper & earth    Justice · pearl & pale green    Kill · crimson    Lightning · steel blue & purple");
         ui.separator();
         egui::CollapsingHeader::new("Backup & channel reads").show(ui, |ui| {
             self.backup_page(ui);

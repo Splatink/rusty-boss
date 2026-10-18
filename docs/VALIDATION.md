@@ -7,9 +7,9 @@ not execution/behavioral equivalence of the original application.
 | Check | Result |
 |---|---|
 | `cargo fmt --check` (after formatting) | Passed |
-| `cargo test --locked` | **64 passed**: 50 unit/UI + 14 integration tests |
+| `cargo test --locked` | **66 passed**: 52 unit/UI + 14 integration tests |
 | `cargo test --locked --no-default-features` | **46 passed**: 32 unit + 14 integration tests |
-| `cargo test --locked --no-default-features --features gui` | **55 passed**: 41 unit/UI + 14 integration tests |
+| `cargo test --locked --no-default-features --features gui` | **57 passed**: 43 unit/UI + 14 integration tests |
 | `cargo clippy --all-targets -- -D warnings` | Passed |
 | `cargo clippy --no-default-features --features gui --all-targets -- -D warnings` | Passed |
 | `cargo build --locked` | Passed |
@@ -55,6 +55,10 @@ smoke test on a display-enabled host, use
 - Large livesets keep preset rows and channel drop targets visible simultaneously.
   Theme round trips/fallback and light/dark contrast are checked. Native portal
   dialog selection itself isn't automated.
+- Palette regression tests cover Justice's pale green fills (including a switch
+  from Lightning with no leftover purple), Lightning's distinct blue and purple
+  roles, and Puppet's warm surfaces/controls. WCAG-style contrast checks require
+  at least 4.5:1 for body text, accent text on cards and selection ink/fill pairs.
 - Header uses bundled Russo One through antialiased font rendering, replacing the
   hard-edged, hand-triangulated spiked wordmark. Live DPI changes at 1×, 1.5×,
   2×, 3× and back to 1× are tested in the same context: glyph atlas texel sizes
@@ -96,7 +100,8 @@ not all interactions. Sequential backup reads are not an atomic snapshot.
 
 This usability pass sent no traffic to the connected amplifier. The earlier
 read-only reverb capture is separate. New logs use the `analysis/usability-*`
-prefix; the current typography/DPI checks use `analysis/brand-*` (earlier
+prefix; the updated palette checks use `analysis/palette-final-*` and refreshed
+all four screenshots. Current typography/DPI checks use `analysis/brand-*` (earlier
 wordmark checks used `analysis/wordmark-*`). Release screenshots are in
 `docs/screenshots/{puppet,justice,kill,lightning}.png`.
 

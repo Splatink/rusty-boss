@@ -100,10 +100,10 @@ Choose a theme in **Settings → Appearance**. Your choice is remembered.
 
 | Theme | Look |
 |---|---|
-| **Puppet** — default | Warm orange accents on charcoal, inspired by amp hardware. |
-| **Justice** | Pearl-white surfaces with soft violet accents. The only light theme. |
+| **Puppet** — default | Warm copper/orange accents over earth-toned surfaces and controls. |
+| **Justice** | Pearl-white surfaces with pale mint/sage accents. The only light theme. |
 | **Kill** | Crimson accents and deep red-black surfaces. |
-| **Lightning** | Plasma-blue accents over midnight-blue surfaces. |
+| **Lightning** | Metallic steel-blue surfaces and accents mixed with purple selections and highlights. |
 
 [Justice](docs/screenshots/justice.png) · [Kill](docs/screenshots/kill.png) · [Lightning](docs/screenshots/lightning.png)
 

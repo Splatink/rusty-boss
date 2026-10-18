@@ -101,9 +101,12 @@ supported. Import asks before discarding unsaved local work; reads of the curren
 amp sound create a new local tone instead of replacing an imported one. Save file
 is explicitly different from saving a channel.
 
-Puppet (default), Kill and Lightning are dark. Justice is pearl light. The
-palette includes cards, controls, knobs, text, selection and effect-bank contrast,
-not just the accent color. Only appearance is persisted; permissions aren't.
+Puppet (default), Kill and Lightning are dark. Justice is pearl white with pale
+green fills and readable dark-green text accents. Lightning mixes metallic
+steel-blue surfaces with purple selection/interaction accents. Puppet carries
+warm copper/earth tones through surfaces, controls and interaction states instead
+of only changing the accent. The palette includes cards, controls, knobs, text,
+selection and effect-bank contrast, not just the accent color. Only appearance is persisted; permissions aren't.
 
 ## Verification boundary
 
