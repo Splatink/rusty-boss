@@ -1,5 +1,11 @@
 # Rusty Boss
 
+> **Warning: AI-generated project.** Rusty Boss was developed using AI-generated
+> code and is experimental. It has not undergone a comprehensive independent code
+> or hardware-safety audit. Bugs could change your amp's sound or overwrite saved
+> tones. Make a known-good backup with BOSS Tone Studio before use, review the
+> code and behavior carefully, and use it at your own risk.
+
 ### Your Katana. Your tones. On Linux.
 
 Rusty Boss is a Linux app for editing **BOSS KATANA amplifiers** and organizing
@@ -144,4 +150,4 @@ of the app's runtime.
 
 For contributors: [development](docs/DEVELOPMENT.md) · [supported features and gaps](docs/PARITY.md)
 · [technical investigation](docs/INVESTIGATION.md) · [preset workflow evidence](docs/PRESET-WORKFLOW.md)
-· [notices](NOTICE.md).
+· [notices](NOTICE.md) · [GPLv3 licensing review](docs/LICENSE-REVIEW.md).
