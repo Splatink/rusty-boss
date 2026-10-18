@@ -170,6 +170,21 @@ impl<T: Transport> Session<T> {
         }
         Ok(p)
     }
+    /// Read just the saved names for channel cards; never select a channel.
+    pub fn read_channel_names(&mut self, schema: &Schema) -> Result<[Option<String>; 9]> {
+        let b = schema.block("PATCH%COM")?;
+        let name = &b.parameters[0];
+        let temp = Address::packed(0x20000000)?.linear();
+        let offset = (b.address - temp) as usize + name.offset;
+        let mut names = std::array::from_fn(|_| None);
+        for (slot, target) in names.iter_mut().enumerate().skip(1) {
+            if self.identity.slot_exists(slot) {
+                let bytes = self.read(slot_address(slot)?.plus(offset)?, name.width)?;
+                *target = Some(String::from_utf8_lossy(&bytes).trim_end().to_owned());
+            }
+        }
+        Ok(names)
+    }
     pub fn read_backup(&mut self, schema: &Schema) -> Result<Backup> {
         let system = self.read_root(schema, "SYSTEM")?;
         let setup = self.read_root(schema, "SETUP")?;
@@ -246,6 +261,17 @@ impl<T: Transport> Session<T> {
             self.dt1(addr, data)?;
         }
         Ok(())
+    }
+    /// Save the supplied snapshot, never an unrelated or stale hardware buffer.
+    /// The caller must hold persistent permission; Guarded checks every packet.
+    /// Failure/cancellation does not roll back the amp and must not be retried automatically.
+    pub fn store_patch(&mut self, schema: &Schema, patch: &Patch, slot: usize) -> Result<()> {
+        ensure!(
+            slot > 0 && self.identity.slot_exists(slot),
+            "cannot overwrite PANEL or absent slot"
+        );
+        self.preview(schema, patch)?;
+        self.commit(slot)
     }
     pub fn select_slot(&mut self, slot: usize) -> Result<()> {
         ensure!(self.identity.slot_exists(slot), "slot unavailable");
@@ -409,6 +435,137 @@ mod tests {
         assert!(s.commit(0).is_err());
         assert!(s.commit(9).is_err());
         assert!(s.transport.sent.is_empty());
+    }
+    #[test]
+    fn channel_names_are_model_filtered_reads_only() {
+        let schema = Schema::load();
+        let b = schema.block("PATCH%COM").unwrap();
+        let offset = (b.address - Address::packed(0x20000000).unwrap().linear()) as usize;
+        let incoming = [1, 2, 5, 6]
+            .into_iter()
+            .map(|slot| {
+                Message::Data {
+                    device: 16,
+                    address: slot_address(slot).unwrap().plus(offset).unwrap(),
+                    data: b.parameters[0]
+                        .encode_text(&format!("Tone {slot}"))
+                        .unwrap(),
+                }
+                .encode()
+                .unwrap()
+            })
+            .collect();
+        let mut s = offline_session(incoming);
+        s.identity.model_code = 5;
+        let names = s.read_channel_names(&schema).unwrap();
+        for (slot, name) in names.iter().enumerate() {
+            if [1, 2, 5, 6].contains(&slot) {
+                assert_eq!(name.as_deref(), Some(format!("Tone {slot}").as_str()));
+            } else {
+                assert!(name.is_none());
+            }
+        }
+        assert_eq!(s.transport.sent.len(), 4);
+        assert!(s
+            .transport
+            .sent
+            .iter()
+            .all(|f| matches!(Message::decode(f), Ok(Message::Request { .. }))));
+    }
+    #[test]
+    fn failed_preview_during_store_never_reaches_commit() {
+        struct Fails {
+            sent: Vec<Vec<u8>>,
+            calls: usize,
+        }
+        impl Transport for Fails {
+            fn send(&mut self, bytes: &[u8]) -> Result<()> {
+                self.calls += 1;
+                ensure!(self.calls < 2, "simulated USB loss");
+                self.sent.push(bytes.to_vec());
+                Ok(())
+            }
+            fn receive(&mut self, _: Duration) -> Result<Option<Vec<u8>>> {
+                Ok(None)
+            }
+        }
+        let schema = Schema::load();
+        let mut s = Session {
+            transport: Fails {
+                sent: vec![],
+                calls: 0,
+            },
+            identity: Identity {
+                device: 16,
+                model_code: 6,
+                name: "KATANA-100",
+            },
+            timeout: Duration::from_millis(5),
+            active: false,
+        };
+        assert!(s
+            .store_patch(&schema, &Patch::new(&schema).unwrap(), 1)
+            .is_err());
+        assert_eq!(s.transport.calls, 2);
+        assert!(s.transport.sent.iter().all(|f| matches!(Message::decode(f), Ok(Message::Data {address,..}) if address.linear() < Address::packed(0x20100000).unwrap().linear())));
+    }
+    #[test]
+    fn store_preflights_destination_and_patch_before_writing() {
+        let schema = Schema::load();
+        let mut p = Patch::new(&schema).unwrap();
+        let mut s = offline_session(VecDeque::new());
+        for slot in [0, 9] {
+            assert!(s.store_patch(&schema, &p, slot).is_err());
+        }
+        s.identity.model_code = 5; // KATANA-50 has no A3.
+        assert!(s.store_patch(&schema, &p, 3).is_err());
+        p.parameters.remove("PATCH%AMP");
+        assert!(s.store_patch(&schema, &p, 1).is_err());
+        assert!(s.transport.sent.is_empty());
+    }
+    #[test]
+    fn store_sends_snapshot_before_single_commit_and_never_selects_channel() {
+        let schema = Schema::load();
+        let mut p = Patch::new(&schema).unwrap();
+        p.rename(&schema, "Dropped tone").unwrap();
+        let ack = |packed| {
+            Message::Data {
+                device: 16,
+                address: Address::packed(packed).unwrap(),
+                data: vec![0],
+            }
+            .encode()
+            .unwrap()
+        };
+        let mut s = offline_session(VecDeque::from([ack(0x7f000104), ack(0x7f01010a)]));
+        s.store_patch(&schema, &p, 2).unwrap();
+        let messages: Vec<_> = s
+            .transport
+            .sent
+            .iter()
+            .map(|f| Message::decode(f).unwrap())
+            .collect();
+        let mut expected = offline_session(VecDeque::new());
+        expected.preview(&schema, &p).unwrap();
+        assert_eq!(
+            &s.transport.sent[..expected.transport.sent.len()],
+            &expected.transport.sent
+        );
+        assert_eq!(messages.len(), expected.transport.sent.len() + 3);
+        assert!(messages.iter().all(|m| !matches!(m, Message::Data { address, .. } if *address == Address::packed(0x7f000100).unwrap())));
+        assert!(
+            matches!(&messages[messages.len()-1], Message::Data {address, data, ..} if *address == Address::packed(0x7f01010a).unwrap() && data == &[0x40, 2])
+        );
+    }
+    #[test]
+    fn missing_save_ack_never_retries_commit() {
+        let schema = Schema::load();
+        let p = Patch::new(&schema).unwrap();
+        let mut s = offline_session(VecDeque::new());
+        assert!(s.store_patch(&schema, &p, 1).is_err());
+        let commands = s.transport.sent.iter().filter(|f| matches!(Message::decode(f), Ok(Message::Data {address, ..}) if address == Address::packed(0x7f000104).unwrap())).count();
+        assert_eq!(commands, 1);
+        assert!(!s.transport.sent.iter().any(|f| matches!(Message::decode(f), Ok(Message::Data {address, ..}) if address == Address::packed(0x7f01010a).unwrap())));
     }
     #[test]
     fn handshake_and_safe_close() {

@@ -3,21 +3,28 @@ use super::*;
 use crate::editor::{self, Control, Edit, Section};
 use crate::safety::Access;
 use egui::{vec2, Sense, Stroke};
-const ORANGE: Color32 = Color32::from_rgb(231, 144, 65);
-const SURFACE: Color32 = Color32::from_rgb(27, 31, 38);
-const MUTED: Color32 = Color32::from_rgb(143, 154, 170);
-fn card() -> egui::Frame {
+fn card(ui: &egui::Ui) -> egui::Frame {
     egui::Frame::new()
-        .fill(SURFACE)
-        .stroke(Stroke::new(1_f32, Color32::from_rgb(46, 53, 63)))
+        .fill(ui.visuals().window_fill)
+        .stroke(ui.visuals().widgets.noninteractive.bg_stroke)
         .corner_radius(10)
         .inner_margin(16)
 }
-const BANKS: [Color32; 3] = [
-    Color32::from_rgb(66, 195, 119),
-    Color32::from_rgb(232, 90, 86),
-    Color32::from_rgb(238, 199, 69),
-];
+fn bank_color(ui: &egui::Ui, bank: usize) -> Color32 {
+    if ui.visuals().dark_mode {
+        [
+            Color32::from_rgb(66, 195, 119),
+            Color32::from_rgb(232, 90, 86),
+            Color32::from_rgb(238, 199, 69),
+        ][bank]
+    } else {
+        [
+            Color32::from_rgb(18, 116, 58),
+            Color32::from_rgb(174, 32, 46),
+            Color32::from_rgb(135, 96, 0),
+        ][bank]
+    }
+}
 
 /// Integer rotary control with keyboard, drag and direct numeric entry. Rendering
 /// must never normalize/clamp an imported value unless the user actually edits it.
@@ -37,7 +44,7 @@ fn rotary(
         ui.spacing_mut().item_spacing.y = 4.;
         ui.add_sized(
             [122., 22.],
-            egui::Label::new(RichText::new(&c.label).size(11.).color(MUTED).strong()).wrap(),
+            egui::Label::new(RichText::new(&c.label).size(11.).color(ui.visuals().weak_text_color()).strong()).wrap(),
         );
         let (rect, r) = ui.allocate_exact_size(vec2(122., 72.), Sense::click_and_drag());
         let mut r = r.on_hover_text("Drag up/down to adjust · Arrow keys for single steps\nClick the value below to type an exact value");
@@ -104,26 +111,26 @@ fn rotary(
         for i in 0..=10 {
             let a = start + sweep * i as f32 / 10.;
             let dir = vec2(a.cos(), a.sin());
-            painter.line_segment([center + dir * 33., center + dir * 36.], Stroke::new(1_f32, Color32::from_rgb(68, 77, 90)));
+            painter.line_segment([center + dir * 33., center + dir * 36.], Stroke::new(1_f32, ui.visuals().widgets.noninteractive.bg_stroke.color));
         }
         painter.add(egui::Shape::line(
             arc(sweep),
-            Stroke::new(3_f32, Color32::from_rgb(53, 61, 73)),
+            Stroke::new(3_f32, ui.visuals().widgets.inactive.bg_fill),
         ));
         painter.add(egui::Shape::line(
             arc(sweep * fraction),
             Stroke::new(4_f32, color),
         ));
-        painter.circle_filled(center + vec2(0., 2.), 22., Color32::from_rgb(13, 16, 20));
-        painter.circle_filled(center, 21., Color32::from_rgb(42, 48, 58));
-        painter.circle_stroke(center, 21., Stroke::new(1_f32, Color32::from_rgb(68, 77, 90)));
+        painter.circle_filled(center + vec2(0., 2.), 22., ui.visuals().extreme_bg_color);
+        painter.circle_filled(center, 21., ui.visuals().widgets.inactive.bg_fill);
+        painter.circle_stroke(center, 21., Stroke::new(1_f32, ui.visuals().widgets.noninteractive.bg_stroke.color));
         let a = start + sweep * fraction;
         painter.line_segment(
             [
                 center + vec2(a.cos(), a.sin()) * 8.,
                 center + vec2(a.cos(), a.sin()) * 18.,
             ],
-            Stroke::new(3_f32, Color32::WHITE),
+            Stroke::new(3_f32, ui.visuals().text_color()),
         );
         if r.has_focus() {
             painter.circle_stroke(center, 30., Stroke::new(1_f32, color));
@@ -302,9 +309,9 @@ impl App {
                 .unwrap_or(0)
                 != 0;
             let button = egui::Button::new(if on { "●  ON" } else { "○  OFF" }).fill(if on {
-                Color32::from_rgb(30, 90, 65)
+                ui.visuals().selection.bg_fill
             } else {
-                Color32::from_gray(42)
+                ui.visuals().widgets.inactive.bg_fill
             });
             if ui.add_enabled(!self.blocking_operation(), button).clicked() {
                 self.set_control(&c, i32::from(!on));
@@ -325,10 +332,15 @@ impl App {
         }
     }
     fn amp_panel(&mut self, ui: &mut egui::Ui) {
-        card().show(ui, |ui| {
+        card(ui).show(ui, |ui| {
             ui.set_width(ui.available_width());
             ui.horizontal_wrapped(|ui| {
-                ui.label(RichText::new("AMPLIFIER").size(12.).strong().color(ORANGE));
+                ui.label(
+                    RichText::new("AMPLIFIER")
+                        .size(12.)
+                        .strong()
+                        .color(self.theme.accent()),
+                );
                 ui.add_space(12.);
                 if let Some(mut c) = self.catalog.control("panel-amp-type-knob") {
                     c.choices = ["ACOUSTIC", "CLEAN", "PUSHED", "CRUNCH", "LEAD", "BROWN"]
@@ -371,7 +383,7 @@ impl App {
             .iter()
             .filter_map(|id| self.catalog.control(id).map(|c| (c, true)))
             .collect();
-            self.field_rows(ui, fields, ORANGE);
+            self.field_rows(ui, fields, self.theme.accent());
         });
     }
     pub(super) fn remap_controls(&self, section: Section, c: Control) -> Control {
@@ -425,14 +437,14 @@ impl App {
                     RichText::new(["G", "R", "Y"][i])
                         .size(12.)
                         .strong()
-                        .color(BANKS[i]),
+                        .color(bank_color(ui, i)),
                 )
                 .min_size(vec2(30., 26.))
                 .corner_radius(13)
                 .stroke(Stroke::new(
                     1_f32,
                     if selected == i {
-                        BANKS[i]
+                        bank_color(ui, i)
                     } else {
                         Color32::TRANSPARENT
                     },
@@ -503,9 +515,9 @@ impl App {
             .patch_set()
             .and_then(|set| self.catalog.panel_position(&self.schema, set, section));
         ui.horizontal(|ui| {
-            ui.label(RichText::new("PANEL").size(10.).color(MUTED));
+            ui.label(RichText::new("PANEL").size(10.).color(ui.visuals().weak_text_color()));
             ui.label(RichText::new(value.map(|n| n.to_string()).unwrap_or_else(|| "—".into())).size(20.).strong());
-            ui.label(RichText::new("/ 100").size(10.).color(MUTED));
+            ui.label(RichText::new("/ 100").size(10.).color(ui.visuals().weak_text_color()));
         }).response.on_hover_text("Panel macro position from the last patch snapshot, not a live position meter.\nThis is separate from the algorithm's Effect Level. A dash means the device did not supply a position.");
     }
     fn effects_row(&mut self, ui: &mut egui::Ui) {
@@ -521,16 +533,16 @@ impl App {
         for row in sections.chunks(columns) {
             ui.horizontal(|ui| {
                 for section in row.iter().copied() {
-                    let accent = BANKS[self.color(section)];
+                    let accent = bank_color(ui, self.color(section));
                     let selected = self.section == section;
-                    card()
+                    card(ui)
                         .inner_margin(12)
                         .stroke(Stroke::new(
                             1_f32,
                             if selected {
                                 accent
                             } else {
-                                Color32::from_rgb(46, 53, 63)
+                                ui.visuals().widgets.noninteractive.bg_stroke.color
                             },
                         ))
                         .show(ui, |ui| {
@@ -542,7 +554,11 @@ impl App {
                                         [width, 28.],
                                         egui::Button::new(
                                             RichText::new(section.label()).strong().color(
-                                                if selected { accent } else { Color32::WHITE },
+                                                if selected {
+                                                    accent
+                                                } else {
+                                                    ui.visuals().text_color()
+                                                },
                                             ),
                                         )
                                         .frame(false),
@@ -581,7 +597,7 @@ impl App {
         let Ok(chain) = chain else {
             ui.colored_label(
                 Color32::YELLOW,
-                "Unknown routing values — inspect Advanced before editing",
+                "Unknown routing values preserved; choose a known signal path to edit",
             );
             return;
         };
@@ -591,7 +607,7 @@ impl App {
                 ui.horizontal(|ui| {
                     for (i, id) in chain.iter().enumerate() {
                         if i > 0 {
-                            ui.label(RichText::new("›").color(MUTED));
+                            ui.label(RichText::new("›").color(ui.visuals().weak_text_color()));
                         }
                         let section = match id.as_str() {
                             "pdl" => Some(Section::Pedal),
@@ -646,7 +662,7 @@ impl App {
         if section == Section::Reverb {
             ui.horizontal_wrapped(|ui| {
                 self.panel_snapshot(ui, section);
-                ui.label(RichText::new("Snapshot macro position · separate from Effect Level").size(12.).color(MUTED))
+                ui.label(RichText::new("Snapshot macro position · separate from Effect Level").size(12.).color(ui.visuals().weak_text_color()))
                     .on_hover_text("The panel knob is an assignable macro. Effect Level below is the algorithm parameter; the two numbers need not match. This readout is from the last patch read, not continuous telemetry.");
             });
             ui.add_space(12.);
@@ -693,7 +709,7 @@ impl App {
                 .iter()
                 .filter_map(|id| self.catalog.control(id).map(|c| (c, true)))
                 .collect();
-                self.field_rows(ui, fields, ORANGE);
+                self.field_rows(ui, fields, self.theme.accent());
             }
             Section::Assignments => {
                 ui.label("Panel knob functions and footswitches");
@@ -712,12 +728,15 @@ impl App {
                         self.dropdown(ui, c);
                     }
                 }
-                ui.small("Detailed expression ranges and GA-FC routing remain available in Advanced. Automatic dynamic assignment rules are not yet fully ported.");
+                ui.small("Detailed expression ranges and GA-FC routing are not yet available in this editor.");
             }
             _ => {
                 let fields = self.detail_controls(section);
                 if fields.is_empty() {
-                    ui.colored_label(Color32::YELLOW,"No known page for this algorithm. Its raw values are preserved in Advanced.");
+                    ui.colored_label(
+                        Color32::YELLOW,
+                        "No controls available for this algorithm yet. Its values are preserved.",
+                    );
                 }
                 let fields = fields
                     .into_iter()
@@ -730,7 +749,7 @@ impl App {
                         (c, enabled)
                     })
                     .collect();
-                self.field_rows(ui, fields, BANKS[self.color(section)]);
+                self.field_rows(ui, fields, bank_color(ui, self.color(section)));
             }
         }
     }
@@ -738,115 +757,42 @@ impl App {
         self.busy && !self.write_busy
     }
     pub(super) fn classic_editor(&mut self, ctx: &egui::Context) {
-        egui::SidePanel::left("classic-sidebar")
-            .default_width(190.)
-            .min_width(180.)
-            .max_width(250.)
-            .frame(
-                egui::Frame::new()
-                    .fill(Color32::from_rgb(23, 27, 33))
-                    .inner_margin(16),
-            )
-            .show(ctx, |ui| {
-                ui.label(RichText::new("YOUR TONES").size(11.).strong().color(MUTED));
-                ui.label(RichText::new("Local library").size(11.).color(MUTED));
-                egui::ScrollArea::vertical()
-                    .id_salt("tone-list")
-                    .max_height(190.)
-                    .show(ui, |ui| {
-                        let mut next = None;
-                        for (i, p) in self.library.data[0].iter().enumerate() {
-                            if ui
-                                .add_enabled_ui(!self.busy, |ui| {
-                                    ui.add_sized(
-                                        [ui.available_width(), 36.],
-                                        egui::Button::new(format!("{:02}   {}", i + 1, p.name()))
-                                            .selected(i == self.selected),
-                                    )
-                                })
-                                .inner
-                                .clicked()
-                            {
-                                next = Some(i);
-                            }
-                        }
-                        if let Some(i) = next {
-                            self.selected = i;
-                            self.disarm();
-                        }
-                    });
-                if ui
-                    .add_sized(
-                        [ui.available_width(), 30.],
-                        egui::Button::new("Manage library").frame(false),
-                    )
-                    .clicked()
-                {
-                    self.page = Page::Librarian;
-                    self.live = false;
-                }
-                ui.add_space(8.);
-                ui.separator();
-                ui.add_space(8.);
-                ui.label(
-                    RichText::new("SOUND DESIGN")
-                        .size(11.)
-                        .strong()
-                        .color(MUTED),
-                );
-                egui::ScrollArea::vertical()
-                    .id_salt("section-list")
-                    .show(ui, |ui| {
-                        for s in Section::ALL {
-                            if ui
-                                .add_sized(
-                                    [ui.available_width(), 32.],
-                                    egui::Button::new(RichText::new(s.label()).size(12.))
-                                        .selected(self.section == s),
-                                )
-                                .clicked()
-                            {
-                                self.select_section(s);
-                            }
-                        }
-                    });
-            });
-        egui::CentralPanel::default().frame(egui::Frame::new().inner_margin(22).fill(Color32::from_rgb(19, 22, 27))).show(ctx,|ui|{
-            if self.library.data[0].is_empty(){ui.heading("No local tones");if ui.button("Create a new tone").clicked(){self.library.data[0].push(Patch::new(&self.schema).unwrap());self.selected=0;self.dirty=true;}return;}
-            ui.horizontal_wrapped(|ui|{
+        egui::CentralPanel::default().frame(egui::Frame::new().inner_margin(18).fill(ctx.style().visuals.panel_fill)).show(ctx, |ui| {
+            if self.library.data[0].is_empty() {
+                ui.heading("Your next sound starts here");
+                ui.label("Import a Gen 3 TSL using the button on the left, or create a tone in Library.");
+                return;
+            }
+            ui.horizontal_wrapped(|ui| {
                 ui.heading(self.library.data[0][self.selected].name());
-                ui.add_space(10.);
-                ui.label(RichText::new(match self.write_gate.access(){Access::ReadOnly=>"PROTECTED  /  READ ONLY",Access::EditBuffer=>"TEMPORARY EDITS  /  PRESETS PROTECTED",Access::Persistent=>"WARNING  /  SAVED WRITES ENABLED"}).size(11.).color(if self.write_gate.access()==Access::Persistent{Color32::LIGHT_RED}else{BANKS[0]}));
+                ui.label(RichText::new(if self.live { "● Live on amp" } else if self.connected.is_none() { "Local tone" } else { "Local · click tone to preview" }).size(12.).color(self.theme.accent()));
+                #[cfg(feature="midi")]
+                if ui.add_enabled(self.connected.is_some() && !self.busy, egui::Button::new("Copy amp sound")).on_hover_text("Read the current amp sound into a new local tone. Your existing tones are kept.").clicked() {
+                    self.disarm(); self.submit(Job::ReadCurrent);
+                }
             });
-            #[cfg(feature="midi")]
-            ui.horizontal_wrapped(|ui|{
-                if ui.add_enabled(self.connected.is_some()&&!self.busy,egui::Button::new("Read current sound…")).clicked(){self.confirm=Some("read-current".into());}
-                let allowed=self.connected.is_some()&&self.synced&&self.write_gate.access()!=Access::ReadOnly&&!self.blocking_operation();
-                ui.add_enabled(allowed,egui::Checkbox::new(&mut self.live,"Live edit buffer"));
-                if ui.button("Connection / protection…").clicked(){self.page=Page::Connection;self.live=false;}
+            ui.horizontal_wrapped(|ui| {
+                for section in Section::ALL {
+                    if ui.selectable_label(self.section == section, section.label()).clicked() { self.select_section(section); }
+                }
             });
-            if self.connected.is_none(){ui.label(RichText::new("Offline · Local tone only. Connect and read to load your amplifier's sound.").size(12.).color(MUTED));}
-            ui.add_space(8.);
-            egui::ScrollArea::vertical().id_salt("classic-main").auto_shrink([false, false]).show(ui,|ui|{
-                ui.add_enabled_ui(!self.blocking_operation(),|ui|{
+            ui.separator();
+            egui::ScrollArea::vertical().id_salt("classic-main").auto_shrink([false, false]).show(ui, |ui| {
+                ui.add_enabled_ui(!self.blocking_operation(), |ui| {
                     if self.section == Section::Amp {
                         self.amp_panel(ui);
-                        ui.add_space(4.);
                         egui::CollapsingHeader::new("Cabinet, resonance & master key").show(ui, |ui| self.details(ui));
-                        ui.add_space(14.);
+                        ui.add_space(10.);
                     }
                     self.effects_row(ui);
-                    ui.add_space(14.);
+                    ui.add_space(10.);
                     if self.section != Section::Amp {
-                        card().show(ui, |ui| { ui.set_width(ui.available_width()); self.details(ui); });
-                        ui.add_space(14.);
+                        card(ui).show(ui, |ui| { ui.set_width(ui.available_width()); self.details(ui); });
+                        ui.add_space(10.);
                     }
-                    card().show(ui, |ui| {
-                        ui.label(RichText::new("SIGNAL PATH").size(11.).strong().color(MUTED));
-                        ui.push_id("summary-chain",|ui|self.chain_view(ui));
+                    egui::CollapsingHeader::new("Signal path").default_open(true).show(ui, |ui| {
+                        self.chain_view(ui);
                     });
-                    ui.add_space(12.);
-                    ui.label(RichText::new("Panel readouts are snapshot macro positions, not algorithm levels. Read the current sound to refresh.").size(11.).color(MUTED));
                 });
             });
         });

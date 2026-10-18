@@ -1,4 +1,9 @@
-# UI-focused reconstruction pass
+# UI-focused reconstruction pass (historical)
+
+This records the earlier UI milestone. Its typed permissions, explicit live
+arming and Advanced raw/System screens have been superseded by the simplified
+[preset workflow](PRESET-WORKFLOW.md). See that document and the README for the
+current interface; the source/evidence observations below remain historical.
 
 ## Boundary
 

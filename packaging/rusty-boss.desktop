@@ -1,7 +1,7 @@
 [Desktop Entry]
 Type=Application
 Name=Rusty Boss
-Comment=Independent experimental Katana Gen 3 editor and librarian
+Comment=Edit BOSS KATANA Gen 3 tones and organize presets on Linux
 Exec=rusty-boss
 Icon=rusty-boss
 Terminal=false

@@ -125,3 +125,33 @@ assignment, all recorded outgoing command types and incoming Roland checksums.
 The generic constructed test still covers the user's illustrative 50/68 case.
 The diagnostic performs at most eight bounded block reads, never retries, emits
 partial/error reports without default-filled values, and needs an explicit port.
+
+
+## PANEL mode versus the PANEL macro readouts
+
+These are distinct concepts. **PANEL mode** is the amplifier's slot 0; the
+**PANEL** numbers on effect cards are last-read macro positions. The latter do
+not constitute a complete PANEL editor.
+
+Current Rusty Boss can read slot 0 via Settings, or read the current sound after
+the user selects PANEL on the amp. Copying the current sound then allowing
+Preview & edit links ordinary patch parameters, including effect algorithms, to
+the current edit buffer. But the channel rail starts at 1, saves explicitly
+require `slot > 0`, and TEMP macro writes/continuous physical-knob monitoring
+are not implemented. There is no persistent PANEL-save workflow.
+
+The earlier decision to reject PANEL saves is a Rusty Boss restriction, **not a
+claim that the hardware cannot write PANEL**. The user reports that saving a
+PANEL effect assignment (e.g. green MOD = Pitch Shifter) survives reboot, whereas
+software knob settings are replaced by the physical knobs on power-up. This
+specific persistence distinction has not been tested independently.
+
+Static corroboration: `js/businesslogic/bts/patch_controller.js:359–390` in the
+supplied original builds `PATCH_WRITE` with `00 + hex2(value)`, then calls
+`sendCommandExport(false, true, true, value, ...)`; the handler has no destination-0
+exclusion. See the selected-source REA parent
+`ev_3e5b7eb3f9ee5796e95271624a33e562daa3f3afdbb406d744d9f2f62de76ea7`
+and [PRESET-WORKFLOW.md](PRESET-WORKFLOW.md). This corroborates a write route; it
+does not prove which fields firmware restores after reboot. No new amplifier
+traffic or writes were performed for this clarification, and slot-0 safety
+checks have not been removed.

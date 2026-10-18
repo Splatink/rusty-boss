@@ -2,16 +2,18 @@
 use crate::protocol::Message;
 use crate::{
     document::{Backup, LiveSet, ParamSet, Patch},
+    editor::{Catalog, Edit, Section},
     protocol::Identity,
+    safety::{Access, WriteGate},
     schema::{slot_label, Schema},
 };
-use crate::{
-    editor::{Catalog, Edit, Section},
-    safety::{Access, WriteGate},
-};
 use eframe::egui::{self, Color32, RichText};
-mod classic;
 use std::{collections::VecDeque, path::PathBuf};
+mod classic;
+#[cfg(test)]
+mod tests;
+mod theme;
+mod wordmark;
 #[cfg(feature = "midi")]
 use std::{
     sync::{
@@ -22,17 +24,32 @@ use std::{
     thread,
     time::Duration,
 };
+use theme::Theme;
+
+#[cfg_attr(not(feature = "midi"), allow(dead_code))]
+#[derive(Clone)]
+struct PreviewRequest {
+    generation: u64,
+    patch: Patch,
+}
+#[derive(Clone)]
+struct SaveRequest {
+    slot: usize,
+    patch: Patch,
+}
+#[derive(Clone)]
+struct PatchDrag(Patch);
 
 #[cfg(feature = "midi")]
 enum Job {
     Connect(String),
     Disconnect,
     ReadCurrent,
-    ReadSystem,
     ReadSlot(usize),
+    ChannelNames,
     Select(usize),
-    Preview(Patch),
-    Commit(usize),
+    Preview(PreviewRequest),
+    Save(SaveRequest),
     Backup,
     Set(String, usize, Vec<u8>),
     Shutdown,
@@ -42,8 +59,10 @@ enum Event {
     Connected(Identity),
     Disconnected,
     Current(Patch),
-    Slot(Patch),
-    System(ParamSet),
+    Slot(usize, Patch),
+    ChannelNames([Option<String>; 9]),
+    Previewed(u64, ParamSet),
+    Saved(SaveRequest),
     Backup(Box<Backup>),
     Done(String),
     Update(Message),
@@ -122,8 +141,10 @@ impl Worker {
                                     parameters: s.read_root(&schema, "PATCH")?,
                                     ..Patch::new(&schema)?
                                 }),
-                                Job::ReadSystem => Event::System(s.read_root(&schema, "SYSTEM")?),
-                                Job::ReadSlot(n) => Event::Slot(s.read_slot(&schema, n)?),
+                                Job::ReadSlot(n) => Event::Slot(n, s.read_slot(&schema, n)?),
+                                Job::ChannelNames => {
+                                    Event::ChannelNames(s.read_channel_names(&schema)?)
+                                }
                                 Job::Select(n) => {
                                     s.select_slot(n)?;
                                     Event::Current(Patch {
@@ -131,26 +152,24 @@ impl Worker {
                                         ..Patch::new(&schema)?
                                     })
                                 }
-                                Job::Preview(p) => {
-                                    s.preview(&schema, &p)?;
-                                    Event::Done("Preview sent to edit buffer; stored slots unchanged. Read back before committing.".into())
+                                Job::Preview(r) => {
+                                    s.preview(&schema, &r.patch)?;
+                                    Event::Previewed(r.generation, s.read_root(&schema, "PATCH")?)
                                 }
-                                Job::Commit(n) => {
-                                    s.commit(n)?;
-                                    Event::Done(format!(
-                                        "Commit acknowledged for {}",
-                                        slot_label(n)
-                                    ))
+                                Job::Save(r) => {
+                                    // Preflight before even changing the temporary sound. Per-packet
+                                    // checks remain effective if the user revokes permission mid-job.
+                                    anyhow::ensure!(
+                                        gate.access() == Access::Persistent,
+                                        "Channel writes are locked"
+                                    );
+                                    s.store_patch(&schema, &r.patch, r.slot)?;
+                                    Event::Saved(r)
                                 }
                                 Job::Backup => Event::Backup(Box::new(s.read_backup(&schema)?)),
                                 Job::Set(id, i, b) => {
                                     s.set_parameter(&schema, &id, i, b)?;
-                                    Event::Done(if id.starts_with("SYSTEM%") {
-                                        "System parameter sent; persistence depends on the amplifier".into()
-                                    } else {
-                                        "Edit-buffer parameter sent (not committed to a saved slot)"
-                                            .into()
-                                    })
+                                    Event::Done("Sound updated · saved channels unchanged".into())
                                 }
                                 _ => unreachable!(),
                             })
@@ -193,28 +212,27 @@ impl Drop for Worker {
 #[derive(Clone, Copy, PartialEq)]
 enum Page {
     Editor,
-    Librarian,
-    System,
-    Backup,
-    Connection,
-    About,
+    Library,
+    Settings,
 }
 struct App {
     schema: Schema,
     catalog: Catalog,
     section: Section,
-    expert: bool,
     offline_model: u8,
+    theme: Theme,
+    file_dialog: Option<(bool, std::sync::mpsc::Receiver<Option<PathBuf>>)>,
     write_gate: WriteGate,
     write_busy: bool,
     pending_edits: VecDeque<Edit>,
-    confirm_text: String,
+    generation: u64,
+    previewing: bool,
+    pending_preview: Option<PreviewRequest>,
+    pending_save: Option<SaveRequest>,
+    channel_names: [Option<String>; 9],
     library: LiveSet,
     selected: usize,
-    system: ParamSet,
     page: Page,
-    filter: String,
-    block: String,
     file: String,
     backup_file: String,
     backup: Option<Backup>,
@@ -225,7 +243,6 @@ struct App {
     busy: bool,
     live: bool,
     synced: bool,
-    system_synced: bool,
     close_dialog: bool,
     slot: usize,
     confirm: Option<String>,
@@ -239,82 +256,114 @@ struct App {
 }
 impl App {
     fn new(ctx: &egui::Context) -> Self {
-        let mut style = (*ctx.style()).clone();
-        style.visuals = egui::Visuals::dark();
-        let v = &mut style.visuals;
-        v.panel_fill = Color32::from_rgb(19, 22, 27);
-        v.window_fill = Color32::from_rgb(27, 31, 38);
-        v.extreme_bg_color = Color32::from_rgb(14, 17, 21);
-        v.faint_bg_color = Color32::from_rgb(32, 37, 44);
-        v.override_text_color = Some(Color32::from_rgb(218, 222, 229));
-        v.selection.bg_fill = Color32::from_rgb(91, 61, 39);
-        v.selection.stroke = egui::Stroke::new(1_f32, Color32::from_rgb(245, 170, 91));
-        for w in [
-            &mut v.widgets.inactive,
-            &mut v.widgets.hovered,
-            &mut v.widgets.active,
-        ] {
-            w.corner_radius = egui::CornerRadius::same(6);
-        }
-        v.widgets.inactive.bg_fill = Color32::from_rgb(37, 43, 52);
-        v.widgets.inactive.weak_bg_fill = Color32::from_rgb(29, 34, 41);
-        v.widgets.inactive.bg_stroke = egui::Stroke::new(1_f32, Color32::from_rgb(53, 61, 72));
-        v.widgets.hovered.bg_fill = Color32::from_rgb(52, 59, 69);
-        v.widgets.hovered.weak_bg_fill = Color32::from_rgb(43, 49, 58);
-        style.spacing.item_spacing = egui::vec2(10., 10.);
-        style.spacing.button_padding = egui::vec2(12., 7.);
-        style.spacing.interact_size.y = 30.;
-        style
-            .text_styles
-            .insert(egui::TextStyle::Body, egui::FontId::proportional(14.));
-        style
-            .text_styles
-            .insert(egui::TextStyle::Button, egui::FontId::proportional(13.));
-        style
-            .text_styles
-            .insert(egui::TextStyle::Heading, egui::FontId::proportional(23.));
-        ctx.set_style(style);
+        wordmark::install(ctx);
+        let theme = Theme::preferences_path()
+            .map(|p| Theme::load(&p))
+            .unwrap_or_default();
+        theme.apply(ctx);
         let schema = Schema::load();
         let write_gate = WriteGate::default();
-        let mut library = LiveSet::new("Rusty Boss");
+        let mut library = LiveSet::new("My tones");
         library.data[0].push(Patch::new(&schema).unwrap());
         Self {
-            system: schema.defaults("SYSTEM").unwrap(),
             #[cfg(feature = "midi")]
             worker: Worker::new(schema.clone(), write_gate.clone()),
             #[cfg(feature = "midi")]
             ports: Vec::new(),
+            #[cfg(feature = "midi")]
+            port: String::new(),
+            schema,
             catalog: Catalog::load(),
             section: Section::Amp,
-            expert: false,
             offline_model: 5,
+            theme,
+            file_dialog: None,
             write_gate,
             write_busy: false,
             pending_edits: VecDeque::new(),
-            confirm_text: String::new(),
-            schema,
+            generation: 0,
+            previewing: false,
+            pending_preview: None,
+            pending_save: None,
+            channel_names: Default::default(),
             library,
             selected: 0,
             page: Page::Editor,
-            filter: String::new(),
-            block: "PATCH%AMP".into(),
-            file: "rusty-boss.tsl".into(),
+            file: "my-tones.tsl".into(),
             backup_file: "katana-backup.alb".into(),
             backup: None,
-            status: "Offline — factory defaults, not a hardware snapshot".into(),
+            status: "Offline · Import a TSL or connect your amp in Settings".into(),
             logs: VecDeque::new(),
             dirty: false,
             connected: None,
             busy: false,
             live: false,
             synced: false,
-            system_synced: false,
             close_dialog: false,
             slot: 1,
             confirm: None,
-            #[cfg(feature = "midi")]
-            port: String::new(),
             smoke_frames: 0,
+        }
+    }
+    fn pick_file(&mut self, saving: bool) {
+        if self.file_dialog.is_some() || self.busy {
+            return;
+        }
+        let (tx, rx) = std::sync::mpsc::channel();
+        let current = PathBuf::from(&self.file);
+        std::thread::spawn(move || {
+            let mut dialog = rfd::FileDialog::new().add_filter("Katana tones", &["tsl"]);
+            if let Some(parent) = current.parent().filter(|p| p.is_dir()) {
+                dialog = dialog.set_directory(parent);
+            }
+            let path = if saving {
+                dialog
+                    .set_file_name(
+                        current
+                            .file_name()
+                            .and_then(|s| s.to_str())
+                            .unwrap_or("my-tones.tsl"),
+                    )
+                    .save_file()
+            } else {
+                dialog.pick_file()
+            };
+            let _ = tx.send(path);
+        });
+        self.file_dialog = Some((saving, rx));
+    }
+    fn poll_file_dialog(&mut self) {
+        if self.busy {
+            return;
+        }
+        let Some((saving, rx)) = &self.file_dialog else {
+            return;
+        };
+        match rx.try_recv() {
+            Ok(path) => {
+                let saving = *saving;
+                self.file_dialog = None;
+                if let Some(path) = path {
+                    self.file = path.to_string_lossy().into_owned();
+                    if saving {
+                        self.confirm_action("save-path");
+                    } else {
+                        self.import_file();
+                    }
+                }
+            }
+            Err(std::sync::mpsc::TryRecvError::Empty) => {}
+            Err(_) => {
+                self.file_dialog = None;
+                self.log("File chooser closed");
+            }
+        }
+    }
+    fn import_file(&mut self) {
+        if self.dirty {
+            self.confirm = Some("import-path".into());
+        } else {
+            self.confirm_action("import-path");
         }
     }
     fn log(&mut self, s: impl Into<String>) {
@@ -323,12 +372,29 @@ impl App {
         self.logs.push_front(s);
         self.logs.truncate(100);
     }
+    fn disarm(&mut self) {
+        self.live = false;
+        self.synced = false;
+        self.pending_edits.clear();
+        self.generation = self.generation.wrapping_add(1);
+        self.pending_preview = None;
+    }
+    fn set_access(&mut self, access: Access) {
+        // An acknowledged in-flight preview must not re-arm after protection changes.
+        let resume = self.synced && self.connected.is_some() && !self.busy;
+        self.disarm();
+        self.write_gate.set(access);
+        self.synced = resume;
+        self.live = resume && access != Access::ReadOnly;
+        self.pending_save = None;
+    }
     #[cfg(feature = "midi")]
     fn submit(&mut self, job: Job) {
         if self.busy {
             return;
         }
         self.write_busy = matches!(job, Job::Set(..));
+        self.previewing = matches!(job, Job::Preview(_));
         if !self.write_busy {
             self.pending_edits.clear();
             self.live = false;
@@ -336,15 +402,80 @@ impl App {
         self.worker.cancel.store(false, Ordering::Relaxed);
         if self.worker.tx.send(job).is_ok() {
             self.busy = true;
-            self.status = "Working — MIDI operations run off the UI thread".into();
+            self.status = if self.previewing {
+                "Previewing tone…"
+            } else {
+                "Working…"
+            }
+            .into();
         } else {
-            self.log("MIDI worker unavailable");
+            self.log("MIDI connection unavailable");
         }
     }
-    fn disarm(&mut self) {
-        self.live = false;
-        self.pending_edits.clear();
-        self.synced = false;
+    fn choose_preset(&mut self, index: usize) {
+        if index >= self.library.data[0].len() || (self.busy && !self.previewing) {
+            return;
+        }
+        self.selected = index;
+        self.disarm();
+        if self.connected.is_none() {
+            self.log("Offline · Editing local tone");
+            return;
+        }
+        if self.write_gate.access() == Access::ReadOnly {
+            self.log(
+                "Read-only · Tone selected locally. Choose Preview & edit to hear it on the amp.",
+            );
+        } else {
+            #[cfg(feature = "midi")]
+            {
+                let request = PreviewRequest {
+                    generation: self.generation,
+                    patch: self.library.data[0][index].clone(),
+                };
+                if self.busy {
+                    self.pending_preview = Some(request);
+                } else {
+                    self.submit(Job::Preview(request));
+                }
+            }
+        }
+    }
+    fn choose_channel(&mut self, slot: usize) {
+        if self.busy
+            || !self
+                .connected
+                .as_ref()
+                .is_some_and(|id| id.slot_exists(slot))
+        {
+            return;
+        }
+        self.slot = slot;
+        self.disarm();
+        #[cfg(feature = "midi")]
+        self.submit(if self.write_gate.access() == Access::ReadOnly {
+            Job::ReadSlot(slot)
+        } else {
+            Job::Select(slot)
+        });
+    }
+    fn can_save_to(&self, slot: usize) -> bool {
+        !self.busy
+            && self.confirm.is_none()
+            && self.write_gate.access() == Access::Persistent
+            && slot > 0
+            && self
+                .connected
+                .as_ref()
+                .is_some_and(|id| id.slot_exists(slot))
+    }
+    fn request_save(&mut self, patch: Patch, slot: usize) {
+        if !self.can_save_to(slot) {
+            self.log("Channel writes are locked, the amp is busy, or this channel is unavailable.");
+            return;
+        }
+        self.pending_save = Some(SaveRequest { patch, slot });
+        self.confirm = Some("save-channel".into());
     }
     #[cfg(feature = "midi")]
     fn flush_edits(&mut self) {
@@ -359,335 +490,359 @@ impl App {
         }
     }
     #[cfg(feature = "midi")]
-    fn events(&mut self) {
-        while let Ok(e) = self.worker.rx.try_recv() {
-            if !matches!(&e, Event::Update(_)) {
-                self.busy = false;
-                self.write_busy = false;
+    fn handle_event(&mut self, e: Event) {
+        if !matches!(&e, Event::Update(_)) {
+            self.busy = false;
+            self.write_busy = false;
+            self.previewing = false;
+        }
+        match e {
+            Event::Connected(id) => {
+                self.log(format!(
+                    "Connected to {} · Choose a tone to preview",
+                    id.name
+                ));
+                self.connected = Some(id);
+                self.channel_names = Default::default();
+                self.disarm();
+                self.submit(Job::ChannelNames);
             }
-            match e {
-                Event::Connected(id) => {
-                    self.log(format!(
-                        "Connected to {}. Read the edit buffer to synchronize.",
-                        id.name
-                    ));
-                    self.connected = Some(id);
-                    self.disarm();
-                    self.system_synced = false;
-                }
-                Event::Disconnected => {
-                    self.connected = None;
-                    self.disarm();
-                    self.log("Disconnected");
-                }
-                Event::Current(p) => {
-                    if self.library.data[0].is_empty() {
-                        self.library.data[0].push(p);
-                        self.selected = 0;
-                    } else {
-                        self.library.data[0][self.selected] = p;
+            Event::Disconnected => {
+                self.connected = None;
+                self.disarm();
+                self.pending_save = None;
+                self.write_gate.set(Access::ReadOnly);
+                self.channel_names = Default::default();
+                self.log("Disconnected · Read-only protection restored");
+            }
+            Event::Current(p) => {
+                // Hardware reads are copies, never destructive replacement of a downloaded tone.
+                self.library.data[0].push(p);
+                self.selected = self.library.data[0].len() - 1;
+                self.dirty = true;
+                self.disarm();
+                self.synced = true;
+                self.live = self.write_gate.access() != Access::ReadOnly;
+                self.log("Current amp sound copied to your library");
+            }
+            Event::ChannelNames(names) => {
+                self.channel_names = names;
+                self.log("Ready · Click a tone to preview, or enable channel writes and drag it to a channel");
+            }
+            Event::Slot(slot, p) => {
+                self.channel_names[slot] = Some(p.name());
+                self.library.data[0].push(p);
+                self.selected = self.library.data[0].len() - 1;
+                self.dirty = true;
+                self.disarm();
+                self.log("Channel copied to your library");
+            }
+            Event::Previewed(generation, readback) => {
+                if let Some(next) = self.pending_preview.take() {
+                    if self.write_gate.access() != Access::ReadOnly {
+                        self.submit(Job::Preview(next));
                     }
-                    self.dirty = true;
+                } else if generation == self.generation
+                    && self.write_gate.access() != Access::ReadOnly
+                {
+                    if let Some(p) = self.library.data[0].get_mut(self.selected) {
+                        p.parameters.extend(readback);
+                    }
                     self.synced = true;
-                    self.live = false;
-                    self.log("Hardware edit buffer read. Arm live editing explicitly if desired.");
+                    self.live = true;
+                    self.log("Previewing on amp · Knobs are live · Saved channels unchanged");
                 }
-                Event::Slot(p) => {
-                    let name = p.name();
-                    self.library.data[0].push(p);
-                    self.selected = self.library.data[0].len() - 1;
-                    self.dirty = true;
-                    self.disarm();
-                    self.log(format!("Added hardware slot: {name}"));
-                }
-                Event::System(data) => {
-                    self.system = data;
-                    self.system_synced = true;
-                    self.log(
-                        "System settings read; changes remain offline unless live editing is armed",
-                    );
-                }
-                Event::Backup(b) => {
-                    self.backup = Some(*b);
-                    self.log("Complete read finished. Export ALB to retain this snapshot.");
-                }
-                Event::Done(s) => self.log(s),
-                Event::Error(s) => {
-                    self.connected = None;
-                    self.disarm();
-                    self.log(format!("MIDI ERROR: {s}"));
-                }
-                Event::Update(Message::Data { address, data, .. }) => {
-                    if address.linear() == 0 {
-                        self.disarm();
-                        self.log(
-                            "Hardware channel changed — read edit buffer again before live editing",
-                        );
-                        continue;
+            }
+            Event::Saved(r) => {
+                let name = r.patch.name();
+                self.channel_names[r.slot] = Some(name.clone());
+                let matching = self.library.data[0]
+                    .get(self.selected)
+                    .is_some_and(|p| p.parameters == r.patch.parameters);
+                self.disarm();
+                self.synced = matching;
+                self.live = matching && self.write_gate.access() != Access::ReadOnly;
+                self.log(format!(
+                    "Saved {name} to {}{}",
+                    slot_label(r.slot),
+                    if self.live {
+                        " · Knobs are live"
+                    } else {
+                        " · Click a tone to preview"
                     }
-                    if self.synced {
-                        for b in &self.schema.blocks {
-                            let first = address.linear() as i64 - b.address as i64;
-                            if first >= 0 && (first as usize) + data.len() <= b.size {
-                                let target = if b.id.starts_with("PATCH%") {
-                                    self.library.data[0]
-                                        .get_mut(self.selected)
-                                        .map(|p| &mut p.parameters)
-                                } else if b.id.starts_with("SYSTEM%") {
-                                    Some(&mut self.system)
-                                } else {
-                                    None
-                                };
-                                if let Some(set) = target {
-                                    if let Some(dst) = set.get_mut(&b.id) {
-                                        dst[first as usize..first as usize + data.len()]
-                                            .copy_from_slice(&data);
-                                        if b.id.starts_with("PATCH%") {
-                                            self.dirty = true;
-                                        }
-                                    }
-                                }
-                                break;
+                ));
+            }
+            Event::Backup(b) => {
+                for (i, patch) in b.patches.iter().enumerate().take(9) {
+                    if let Some(p) = patch {
+                        self.channel_names[i] = Some(
+                            Patch {
+                                parameters: p.0.clone(),
+                                ..Patch::new(&self.schema).unwrap()
                             }
+                            .name(),
+                        );
+                    }
+                }
+                self.backup = Some(*b);
+                self.log("Backup read complete · Save the ALB file to keep it");
+            }
+            Event::Done(s) => self.log(s),
+            Event::Error(s) => {
+                self.connected = None;
+                self.disarm();
+                self.pending_save = None;
+                self.write_gate.set(Access::ReadOnly);
+                self.channel_names = Default::default();
+                self.log(format!("Connection stopped: {s}. Hardware state may be unknown; do not retry a save blindly."));
+            }
+            Event::Update(Message::Data { address, data, .. }) => {
+                if address.linear() == 0 {
+                    self.disarm();
+                    self.log("Amp channel changed · Click a tone to preview or copy the amp sound");
+                    return;
+                }
+                if self.synced {
+                    for b in self
+                        .schema
+                        .blocks
+                        .iter()
+                        .filter(|b| b.id.starts_with("PATCH%"))
+                    {
+                        let first = address.linear() as i64 - b.address as i64;
+                        if first >= 0 && first as usize + data.len() <= b.size {
+                            if let Some(dst) = self.library.data[0]
+                                .get_mut(self.selected)
+                                .and_then(|p| p.parameters.get_mut(&b.id))
+                            {
+                                dst[first as usize..first as usize + data.len()]
+                                    .copy_from_slice(&data);
+                                self.dirty = true;
+                            }
+                            break;
                         }
                     }
                 }
-                Event::Update(_) => {}
             }
+            Event::Update(_) => {}
         }
+    }
+    #[cfg(feature = "midi")]
+    fn events(&mut self) {
+        while let Ok(e) = self.worker.rx.try_recv() {
+            self.handle_event(e);
+        }
+    }
+
+    fn permissions(&mut self, ui: &mut egui::Ui) {
+        let access = self.write_gate.access();
+        ui.horizontal_wrapped(|ui| {
+            if ui.selectable_label(access == Access::ReadOnly, "Read-only").on_hover_text("Browse and read the amp. No preview, knob or saved-channel writes. Editor connection setup/cleanup still sends mode commands.").clicked() {
+                self.set_access(Access::ReadOnly);
+            }
+            if ui.selectable_label(access == Access::EditBuffer, "Preview & edit").on_hover_text("Click tones to hear them; knobs edit the current sound. Saved channels stay locked.").clicked() {
+                self.set_access(Access::EditBuffer);
+            }
+            if access == Access::Persistent {
+                if ui.button("Channel writes enabled · Lock").clicked() { self.set_access(Access::EditBuffer); }
+            } else if ui.button("Enable channel writes…").clicked() { self.confirm = Some("unlock".into()); }
+        });
     }
     fn header(&mut self, ctx: &egui::Context) {
         egui::TopBottomPanel::top("header")
             .frame(
                 egui::Frame::new()
-                    .fill(Color32::from_rgb(23, 27, 33))
-                    .inner_margin(egui::Margin::symmetric(20, 12)),
+                    .fill(ctx.style().visuals.window_fill)
+                    .inner_margin(egui::Margin::symmetric(18, 10)),
             )
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
-                    ui.label(
-                        RichText::new("RUSTY BOSS")
-                            .size(22.)
-                            .strong()
-                            .color(Color32::from_rgb(245, 170, 91)),
-                    );
-                    ui.label(RichText::new("/  KATANA Gen 3").size(13.).weak());
+                    wordmark::show(ui, self.theme.accent());
+                    ui.label(RichText::new("KATANA / LINUX").size(11.).weak());
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        ui.label(
-                            RichText::new(
-                                self.connected
-                                    .as_ref()
-                                    .map(|i| i.name)
-                                    .unwrap_or("OFFLINE  ·  LOCAL EDITOR"),
-                            )
-                            .size(12.)
-                            .color(if self.connected.is_some() {
-                                Color32::from_rgb(98, 203, 151)
-                            } else {
-                                Color32::from_gray(150)
-                            }),
+                        ui.small(
+                            self.connected
+                                .as_ref()
+                                .map(|id| id.name)
+                                .unwrap_or("Offline"),
                         );
                         if self.dirty {
                             ui.label(
-                                RichText::new("● Unsaved")
-                                    .size(12.)
-                                    .color(Color32::from_rgb(245, 170, 91)),
+                                RichText::new("● Unsaved file")
+                                    .color(self.theme.accent())
+                                    .size(11.),
                             );
                         }
                     });
                 });
-                ui.add_space(4.);
                 ui.horizontal_wrapped(|ui| {
                     for (p, label) in [
                         (Page::Editor, "Editor"),
-                        (Page::Librarian, "Librarian"),
-                        (Page::System, "System"),
-                        (Page::Backup, "Backup"),
-                        (Page::Connection, "Connection"),
-                        (Page::About, "About / evidence"),
+                        (Page::Library, "Library"),
+                        (Page::Settings, "Settings"),
                     ] {
                         if ui.selectable_label(self.page == p, label).clicked() {
                             self.page = p;
-                            self.live = false;
-                            self.filter.clear();
-                            self.block = if p == Page::System {
-                                "SYSTEM%COM"
-                            } else {
-                                "PATCH%AMP"
-                            }
-                            .into();
                         }
                     }
                     ui.separator();
-                    if self.page == Page::Editor {
-                        let before = self.expert;
-                        ui.selectable_value(&mut self.expert, false, "Standard");
-                        ui.selectable_value(&mut self.expert, true, "Advanced raw");
-                        if before != self.expert {
-                            self.disarm();
-                        }
-                    }
+                    self.permissions(ui);
                 });
             });
         egui::TopBottomPanel::bottom("status").show(ctx, |ui| {
-            ui.horizontal(|ui| {
+            ui.horizontal_wrapped(|ui| {
                 if self.busy {
                     ui.spinner();
                 }
-                ui.label(RichText::new(&self.status).size(12.).weak());
+                ui.label(RichText::new(&self.status).size(12.));
                 #[cfg(feature = "midi")]
                 if self.busy && ui.button("Cancel").clicked() {
                     self.worker.cancel.store(true, Ordering::Relaxed);
-                    self.live = false;
+                    self.disarm();
                 }
-            });
-            egui::CollapsingHeader::new("Operation log").show(ui, |ui| {
-                egui::ScrollArea::vertical()
-                    .max_height(110.)
-                    .show(ui, |ui| {
-                        for s in &self.logs {
-                            ui.label(s);
-                        }
-                    });
             });
         });
     }
-    fn editor(&mut self, ctx: &egui::Context, system: bool) {
-        if !system && !self.expert {
-            self.classic_editor(ctx);
-            return;
-        }
-        let root = if system { "SYSTEM%" } else { "PATCH%" };
-        egui::SidePanel::left("blocks")
-            .resizable(true)
-            .default_width(245.)
-            .show(ctx, |ui| {
-                ui.heading(if system {
-                    "System settings"
-                } else {
-                    "Effect / parameter blocks"
-                });
-                ui.text_edit_singleline(&mut self.filter);
-                ui.small("Search block or parameter names");
-                egui::ScrollArea::vertical().show(ui, |ui| {
-                    let q = self.filter.to_lowercase();
-                    for b in &self.schema.blocks {
-                        if !b.id.starts_with(root) {
-                            continue;
-                        }
-                        if !q.is_empty()
-                            && !b.id.to_lowercase().contains(&q)
-                            && !b
-                                .parameters
-                                .iter()
-                                .any(|p| p.name.to_lowercase().contains(&q))
-                        {
-                            continue;
-                        }
-                        let label = b.id.trim_start_matches(root).replace('_', " ");
-                        if ui.selectable_label(self.block == b.id, label).clicked() {
-                            self.block = b.id.clone();
-                        }
-                    }
-                });
-            });
-        egui::CentralPanel::default().show(ctx,|ui|{
-            if !system && self.library.data[0].is_empty(){ui.label("Add a patch in the Librarian first.");return;}
-            if !system {
-                ui.heading(self.library.data[0][self.selected].name());
-                ui.horizontal(|ui|{
-                    ui.label("Patch name:");let mut name=self.library.data[0][self.selected].name();
-                    let response=ui.add(egui::TextEdit::singleline(&mut name).char_limit(16));
-                    if response.changed(){let result=self.library.data[0][self.selected].rename(&self.schema,&name);match result{Ok(())=>{self.dirty=true;self.disarm();},Err(e)=>self.log(e.to_string())}}
+    fn tone_list(&mut self, ui: &mut egui::Ui) {
+        let mut next = None;
+        for (i, p) in self.library.data[0].iter().enumerate() {
+            let r = ui.add_enabled(
+                !self.busy || self.previewing,
+                egui::Button::new(format!("{:02}   {}", i + 1, p.name()))
+                    .selected(i == self.selected)
+                    .sense(egui::Sense::click_and_drag())
+                    .min_size(egui::vec2(ui.available_width(), 34.)),
+            );
+            r.dnd_set_drag_payload(PatchDrag(p.clone()));
+            if r.clicked() {
+                next = Some(i);
+            }
+            if r.dragged() {
+                egui::show_tooltip_at_pointer(ui.ctx(), ui.layer_id(), r.id.with("drag"), |ui| {
+                    ui.label(p.name());
                 });
             }
-            #[cfg(feature="midi")]
-            ui.horizontal_wrapped(|ui|{
-                #[cfg(feature="midi")]
-                {
-                    if ui.add_enabled(self.connected.is_some()&&!self.busy,egui::Button::new(if system{"Read system"}else{"Read edit buffer (replaces local patch)"})).clicked(){self.confirm=Some(if system{"read-system"}else{"read-current"}.into());}
-                    let allowed=self.connected.is_some()&&(if system {self.system_synced&&self.write_gate.access()==Access::Persistent}else{self.synced&&self.write_gate.access()!=Access::ReadOnly})&&!self.busy;
-                    ui.add_enabled(allowed,egui::Checkbox::new(&mut self.live,"Arm LIVE editing"));
-                    if !system && ui.add_enabled(self.connected.is_some()&&!self.busy&&self.write_gate.access()!=Access::ReadOnly,egui::Button::new("Preview local patch on amp…")).clicked(){self.confirm=Some("preview".into());}
-                }
+        }
+        if let Some(i) = next {
+            self.choose_preset(i);
+        }
+        if self.library.data[0].is_empty() {
+            ui.weak("Import a TSL to add tones.");
+        }
+    }
+    fn channel_cards(&mut self, ui: &mut egui::Ui) {
+        ui.label(RichText::new("AMP CHANNELS").size(11.).strong());
+        if self.connected.is_none() {
+            ui.weak("Connect your amp in Settings to see its channels.");
+            return;
+        }
+        ui.small(if self.write_gate.access() == Access::Persistent {
+            "Drag a tone here to save it."
+        } else {
+            "Saved channels locked. Enable channel writes to save a tone."
+        });
+        for slot in 1..9 {
+            if !self
+                .connected
+                .as_ref()
+                .is_some_and(|id| id.slot_exists(slot))
+            {
+                continue;
+            }
+            let can_save = self.can_save_to(slot);
+            let hovering = egui::DragAndDrop::has_payload_of_type::<PatchDrag>(ui.ctx());
+            let title = match &self.channel_names[slot] {
+                Some(name) => format!("{}   {name}", slot_label(slot)),
+                None => slot_label(slot),
+            };
+            let r =
+                ui.add(egui::Button::new(title).min_size(egui::vec2(ui.available_width(), 32.)));
+            if hovering && r.contains_pointer() {
+                ui.painter().rect_stroke(
+                    r.rect,
+                    7.,
+                    egui::Stroke::new(
+                        2_f32,
+                        if can_save {
+                            self.theme.accent()
+                        } else {
+                            ui.visuals().error_fg_color
+                        },
+                    ),
+                    egui::StrokeKind::Inside,
+                );
+            }
+            if let Some(p) = r.dnd_release_payload::<PatchDrag>() {
+                self.request_save(p.0.clone(), slot);
+            }
+            if r.clicked() {
+                self.choose_channel(slot);
+            }
+            r.on_hover_text(if self.write_gate.access() == Access::ReadOnly {
+                "Click to copy this channel into your library without changing the amp. Saving is locked."
+            } else if can_save {
+                "Drop a library tone to save. Click to hear this channel (discards unsaved amp-buffer edits)."
+            } else {
+                "Click to hear this channel (discards unsaved amp-buffer edits). Enable channel writes to save by dropping."
             });
-            if system { ui.colored_label(Color32::YELLOW,"Offline system values are transient and are NOT saved in TSL livesets. Read hardware and arm live editing to apply individual changes. Use hardware ALB backup to retain applied settings."); }
-            ui.small("Advanced view: raw device units, all banks and inactive algorithms. Use Standard editor for named controls and algorithm-specific pages.");
-            ui.separator();
-            let Some(b)=self.schema.blocks.iter().find(|b|b.id==self.block).cloned() else{return;};
-            ui.heading(b.id.replace('%'," / "));ui.monospace(format!("Address {}  •  {} bytes",b.address(),b.size));
-            if b.readonly{ui.label("Read-only telemetry / stored knob state");}
-            let mut write_job=None;
-            let mut local_changed=false;
-            egui::ScrollArea::vertical().show(ui,|ui|{
-                ui.add_enabled_ui(!self.busy&&!b.readonly,|ui|{
-                    let set=if system{&mut self.system}else{&mut self.library.data[0][self.selected].parameters};
-                    let data=set.entry(b.id.clone()).or_insert_with(||b.defaults().unwrap());
-                    for (i,p) in b.parameters.iter().enumerate(){
-                        ui.push_id(i,|ui|{
-                            let label=p.label();
-                            if p.encoding=="ascii"{return;}
-                            let value=p.decode_number(data);
-                            let Ok(mut value)=value else{ui.colored_label(Color32::YELLOW,format!("{label}: invalid raw encoding"));return;};
-                            let mut finished=false;
-                            if !p.choices.is_empty(){
-                                ui.horizontal(|ui|{
-                                    ui.label(&label);
-                                    let display=p.choices.iter().find(|c|c.value==value).map(|c|c.label.clone()).unwrap_or_else(||format!("Unknown ({value})"));
-                                    egui::ComboBox::from_id_salt(i).selected_text(display).show_ui(ui,|ui|{
-                                        for c in &p.choices{if ui.selectable_value(&mut value,c.value,&c.label).changed(){finished=true;}}
-                                    });
-                                });
-                            } else if p.min==0&&p.max==1 {
-                                let mut on=value!=0;if ui.checkbox(&mut on,&label).changed(){value=i32::from(on);finished=true;}
-                            }else{
-                                let r=ui.add(egui::Slider::new(&mut value,p.min..=p.max).text(&label));
-                                if r.changed()&&!system{self.dirty=true;}
-                                finished=r.drag_stopped()||(r.changed()&&!r.dragged());
-                            }
-                            if let Ok(bytes)=p.encode_number(value){
-                                if data[p.offset..p.offset+p.width]!=bytes {data[p.offset..p.offset+p.width].copy_from_slice(&bytes);if !system{self.dirty=true;}local_changed=true;}
-                                if finished&&self.live {write_job=Some((b.id.clone(),i,bytes));}
-                            }
-                        });
+        }
+    }
+    fn preset_sidebar(&mut self, ctx: &egui::Context) {
+        egui::SidePanel::left("presets")
+            .default_width(235.)
+            .min_width(190.)
+            .max_width(310.)
+            .resizable(true)
+            .show(ctx, |ui| {
+                ui.label(
+                    RichText::new("MY TONES")
+                        .size(11.)
+                        .strong()
+                        .color(self.theme.accent()),
+                );
+                ui.small(&self.library.name);
+                ui.small("Click to preview · Drag to save");
+                // Keep the destination cards reachable even with a large imported liveset.
+                let height = (ui.available_height() * 0.34).clamp(100., 240.);
+                egui::ScrollArea::vertical()
+                    .id_salt("tone-list")
+                    .max_height(height)
+                    .show(ui, |ui| self.tone_list(ui));
+                ui.horizontal(|ui| {
+                    if ui.button("Import TSL…").clicked() {
+                        self.pick_file(false);
+                    }
+                    if ui.button("Save file…").clicked() {
+                        self.pick_file(true);
                     }
                 });
+                ui.separator();
+                egui::ScrollArea::vertical()
+                    .id_salt("channel-list")
+                    .show(ui, |ui| self.channel_cards(ui));
             });
-            if local_changed && !self.live { if system {self.system_synced=false;} else {self.synced=false;} }
-            #[cfg(feature="midi")]
-            if let Some((id,i,bytes))=write_job{self.submit(Job::Set(id,i,bytes));}
-            #[cfg(not(feature="midi"))]
-            let _=write_job;
-        });
     }
-    fn librarian(&mut self, ui: &mut egui::Ui) {
-        ui.heading("Local liveset librarian");
+    fn library_page(&mut self, ui: &mut egui::Ui) {
+        ui.heading("Your tone library");
+        ui.label("Choose a tone on the left to edit or preview it. Drag it onto an amp channel to save it there.");
         ui.horizontal(|ui| {
             ui.label("Liveset name:");
             if ui.text_edit_singleline(&mut self.library.name).changed() {
                 self.dirty = true;
             }
         });
-        ui.horizontal(|ui| {
-            ui.label("TSL path:");
-            ui.text_edit_singleline(&mut self.file);
-        });
-        ui.horizontal(|ui| {
-            if ui.button("Import TSL…").clicked() {
-                self.confirm = Some("import".into());
-            }
-            if ui.button("Save TSL…").clicked() {
-                self.confirm = Some("save".into());
-            }
-            if ui.button("New patch").clicked() {
+        ui.horizontal_wrapped(|ui| {
+            if ui.button("New tone").clicked() {
                 self.library.data[0].push(Patch::new(&self.schema).unwrap());
                 self.selected = self.library.data[0].len() - 1;
                 self.dirty = true;
                 self.disarm();
             }
-            let exists = !self.library.data[0].is_empty();
             if ui
-                .add_enabled(exists, egui::Button::new("Duplicate"))
+                .add_enabled(
+                    !self.library.data[0].is_empty(),
+                    egui::Button::new("Duplicate"),
+                )
                 .clicked()
             {
                 let p = self.library.data[0][self.selected].clone();
@@ -697,13 +852,16 @@ impl App {
                 self.disarm();
             }
             if ui
-                .add_enabled(exists, egui::Button::new("Delete…"))
+                .add_enabled(
+                    !self.library.data[0].is_empty(),
+                    egui::Button::new("Delete…"),
+                )
                 .clicked()
             {
                 self.confirm = Some("delete".into());
             }
             if ui
-                .add_enabled(exists && self.selected > 0, egui::Button::new("Move up"))
+                .add_enabled(self.selected > 0, egui::Button::new("Move up"))
                 .clicked()
             {
                 self.library.data[0].swap(self.selected, self.selected - 1);
@@ -712,7 +870,7 @@ impl App {
             }
             if ui
                 .add_enabled(
-                    exists && self.selected + 1 < self.library.data[0].len(),
+                    self.selected + 1 < self.library.data[0].len(),
                     egui::Button::new("Move down"),
                 )
                 .clicked()
@@ -722,225 +880,55 @@ impl App {
                 self.dirty = true;
             }
         });
-        egui::ScrollArea::vertical()
-            .max_height(260.)
-            .show(ui, |ui| {
-                for (i, p) in self.library.data[0].iter().enumerate() {
-                    if ui
-                        .selectable_label(self.selected == i, format!("{:03}  {}", i + 1, p.name()))
-                        .clicked()
-                    {
-                        self.selected = i;
-                        self.live = false;
-                        self.synced = false;
-                    }
-                }
-            });
         if let Some(p) = self.library.data[0].get_mut(self.selected) {
             ui.separator();
-            ui.horizontal(|ui| {
-                ui.label("Tone name:");
-                let mut name = p.name();
-                if ui
-                    .add(egui::TextEdit::singleline(&mut name).char_limit(16))
-                    .changed()
-                    && p.rename(&self.schema, &name).is_ok()
-                {
-                    self.dirty = true;
-                    self.live = false;
-                    self.synced = false;
-                    self.pending_edits.clear();
-                }
-            });
-            ui.label("Patch notes:");
-            if !p.memo.is_object() {
-                ui.small("This patch's legacy memo value is preserved verbatim.");
-            } else {
+            ui.label("Tone name:");
+            let mut name = p.name();
+            let renamed = ui
+                .add(egui::TextEdit::singleline(&mut name).char_limit(16))
+                .changed()
+                && p.rename(&self.schema, &name).is_ok();
+            if renamed {
+                self.dirty = true;
+            }
+            ui.label("Notes:");
+            if p.memo.is_object() {
                 let mut note = p
                     .memo
                     .get("memo")
-                    .and_then(|v| v.as_str())
+                    .and_then(|s| s.as_str())
                     .unwrap_or("")
                     .to_owned();
                 if ui.text_edit_multiline(&mut note).changed() {
-                    p.memo["memo"] = serde_json::Value::String(note);
+                    p.memo["memo"] = note.into();
                     self.dirty = true;
                 }
+            } else {
+                ui.weak("Original notes format preserved.");
+            }
+            if renamed {
+                self.disarm();
             }
         }
         ui.separator();
-        self.slot_controls(ui);
-        ui.separator();
+        ui.label("Save file saves a TSL on your computer. Dropping onto a channel saves to your amplifier.");
         ui.hyperlink_to(
-            "Open BOSS Tone Exchange in your browser",
+            "Find Gen 3 tones on BOSS Tone Exchange",
             "https://bosstoneexchange.com/gear/katana_gen_3",
         );
-        ui.small("Download Gen 3 TSL files using your browser, then import here. Embedded account/cloud integration and MkI/MkII conversion are not implemented.");
-    }
-    fn slot_controls(&mut self, ui: &mut egui::Ui) {
-        ui.heading("Hardware channels");
-        ui.horizontal(|ui| {
-            egui::ComboBox::from_id_salt("slot")
-                .selected_text(slot_label(self.slot))
-                .show_ui(ui, |ui| {
-                    for i in 0..9 {
-                        if self.connected.as_ref().is_none_or(|id| id.slot_exists(i)) {
-                            ui.selectable_value(&mut self.slot, i, slot_label(i));
-                        }
-                    }
-                });
-            #[cfg(feature = "midi")]
-            ui.add_enabled_ui(self.connected.is_some() && !self.busy, |ui| {
-                if ui.button("Read slot into library").clicked() {
-                    self.submit(Job::ReadSlot(self.slot));
-                }
-                if ui
-                    .add_enabled(
-                        self.write_gate.access() != Access::ReadOnly,
-                        egui::Button::new("Select on amplifier…"),
-                    )
-                    .clicked()
-                {
-                    self.confirm = Some("select".into());
-                }
-                if ui
-                    .add_enabled(
-                        self.slot > 0 && self.write_gate.access() == Access::Persistent,
-                        egui::Button::new("Commit hardware edit buffer…"),
-                    )
-                    .clicked()
-                {
-                    self.confirm_text.clear();
-                    self.confirm = Some("commit".into());
-                }
-            });
-        });
-        ui.small("Commit stores what is CURRENTLY on the amplifier, not the selected local patch. Preview local changes first, then read back and verify. PANEL cannot be overwritten here.");
-    }
-    fn backup_page(&mut self, ui: &mut egui::Ui) {
-        ui.heading("All-data backup / file recovery");
-        ui.label("Hardware backup reads system settings, setup and each channel present on the detected model. A failed or cancelled read is discarded.");
-        ui.horizontal(|ui| {
-            ui.label("ALB path:");
-            ui.text_edit_singleline(&mut self.backup_file);
-        });
-        ui.horizontal(|ui| {
-            #[cfg(feature = "midi")]
-            if ui
-                .add_enabled(
-                    self.connected.is_some() && !self.busy,
-                    egui::Button::new("Read amplifier backup"),
-                )
-                .clicked()
-            {
-                self.backup = None;
-                self.submit(Job::Backup);
-            }
-            if ui.button("Load ALB file").clicked() {
-                match Backup::load(&PathBuf::from(&self.backup_file)) {
-                    Ok(b) => {
-                        self.backup = Some(b);
-                        self.log("Backup loaded locally — nothing sent to hardware");
-                    }
-                    Err(e) => self.log(format!("{e:#}")),
-                }
-            }
-            if ui
-                .add_enabled(self.backup.is_some(), egui::Button::new("Export ALB…"))
-                .clicked()
-            {
-                self.confirm = Some("save-backup".into());
-            }
-        });
-        if let Some(b) = &self.backup {
-            ui.label(format!(
-                "Model: {} • {} system blocks • {} rows",
-                b.model,
-                b.system.len(),
-                b.patches.len()
-            ));
-            let mut extract = None;
-            for (i, p) in b.patches.iter().enumerate() {
-                if let Some(p) = p {
-                    let patch = Patch {
-                        parameters: p.0.clone(),
-                        ..Patch::new(&self.schema).unwrap()
-                    };
-                    ui.horizontal(|ui| {
-                        ui.label(format!("{} — {}", slot_label(i), patch.name()));
-                        if ui.button("Copy to library").clicked() {
-                            extract = Some(patch);
-                        }
-                    });
-                }
-            }
-            if let Some(mut p) = extract {
-                match p.complete(&self.schema) {
-                    Ok(w) => {
-                        self.library.data[0].push(p);
-                        self.selected = self.library.data[0].len() - 1;
-                        self.dirty = true;
-                        self.disarm();
-                        self.log(format!(
-                            "Copied backup patch to library ({} default-fill warnings)",
-                            w.len()
-                        ));
-                    }
-                    Err(e) => self.log(e.to_string()),
-                }
-            }
-        }
-        ui.separator();
-        ui.colored_label(Color32::YELLOW,"Bulk hardware restore is deliberately unavailable until model-specific write/export behavior has been hardware-verified. ALB round-trip and patch recovery are available.");
+        ui.small("You can also drop a .tsl file onto this window to import it. Import replaces the local liveset; save your work first.");
     }
     fn connection(&mut self, ui: &mut egui::Ui) {
-        ui.heading("Preset protection");
-        ui.label("Permissions start locked every time you launch. Connecting and reading do not select or overwrite saved channels. Editor-session setup/cleanup still sends mode commands.");
-        let mut access = self.write_gate.access();
-        ui.horizontal_wrapped(|ui| {
-            ui.selectable_value(&mut access, Access::ReadOnly, "Protected · reads only");
-            ui.selectable_value(
-                &mut access,
-                Access::EditBuffer,
-                "Allow temporary edit-buffer changes",
-            );
-        });
-        if access != self.write_gate.access() {
-            self.disarm();
-            self.write_gate.set(access);
-        }
-        if access == Access::Persistent {
-            ui.colored_label(
-                Color32::LIGHT_RED,
-                "Saved preset / system writes are UNLOCKED. Click Protected to lock them again.",
-            );
-        } else if ui.button("Unlock saved preset / system writes…").clicked() {
-            self.confirm_text.clear();
-            self.confirm = Some("unlock".into());
-        }
-        ui.small("Temporary permission allows current-sound parameter edits, preview and explicit channel selection. It blocks saved-channel commits, system writes and export/reset commands at the transport boundary.");
-        ui.separator();
-        if self.connected.is_none() {
-            ui.horizontal(|ui| {
-                ui.label("Offline model preview:");
-                egui::ComboBox::from_id_salt("offline-model")
-                    .selected_text(crate::editor::model_name(self.offline_model))
-                    .show_ui(ui, |ui| {
-                        for code in 5..=11 {
-                            ui.selectable_value(
-                                &mut self.offline_model,
-                                code,
-                                crate::editor::model_name(code),
-                            );
-                        }
-                    });
-            });
-        }
-        ui.heading("Linux ALSA USB-MIDI");
-        ui.label("Connect the Katana by USB. Select the control MIDI port, not an audio PCM port. Rusty Boss never auto-connects or writes on startup.");
+        ui.heading("Amplifier");
+        ui.label(
+            "Connect your Katana by USB, refresh the list, then choose its MIDI control port.",
+        );
         #[cfg(feature = "midi")]
         {
-            if ui.button("Refresh MIDI ports").clicked() {
+            if ui
+                .add_enabled(!self.busy, egui::Button::new("Refresh MIDI ports"))
+                .clicked()
+            {
                 match crate::midi::ports() {
                     Ok(p) => self.ports = p,
                     Err(e) => self.log(e.to_string()),
@@ -953,37 +941,181 @@ impl App {
                     format!("{} ({})", p.name, p.address),
                 );
             }
-            if self.ports.is_empty() {
-                ui.label("No ports listed yet. Click Refresh MIDI ports to enumerate ALSA ports; startup performs no MIDI enumeration or connection. Check kernel driver and /dev/snd permissions if the list stays empty. Do not run as root.");
-            }
             ui.horizontal(|ui| {
-                ui.label("ALSA address:");
-                ui.text_edit_singleline(&mut self.port);
-                if ui
+                ui.add(egui::TextEdit::singleline(&mut self.port).hint_text("ALSA MIDI address"));
+                if self.connected.is_some() {
+                    if ui
+                        .add_enabled(!self.busy, egui::Button::new("Disconnect"))
+                        .clicked()
+                    {
+                        self.disarm();
+                        self.submit(Job::Disconnect);
+                    }
+                } else if ui
                     .add_enabled(
-                        !self.port.is_empty() && !self.busy && self.connected.is_none(),
+                        !self.busy && !self.port.is_empty(),
                         egui::Button::new("Connect"),
                     )
                     .clicked()
                 {
                     self.submit(Job::Connect(self.port.clone()));
                 }
+            });
+            if self.ports.is_empty() {
+                ui.weak("No ports listed? Refresh first. Check the USB cable and close other MIDI editors if needed.");
+            }
+        }
+        #[cfg(not(feature = "midi"))]
+        ui.label("This build is offline-only (no MIDI support).");
+        ui.small("Read-only protects tones and settings, including temporary sound changes. The editor connection still sends session setup/cleanup commands. Nothing connects automatically.");
+        ui.separator();
+        ui.heading("Appearance");
+        ui.horizontal_wrapped(|ui| {
+            for theme in Theme::ALL {
                 if ui
-                    .add_enabled(
-                        self.connected.is_some() && !self.busy,
-                        egui::Button::new("Disconnect"),
+                    .selectable_label(
+                        self.theme == theme,
+                        RichText::new(theme.name()).color(theme.accent()),
                     )
                     .clicked()
                 {
-                    self.submit(Job::Disconnect);
+                    self.theme = theme;
+                    theme.apply(ui.ctx());
+                    if let Some(p) = Theme::preferences_path() {
+                        if let Err(e) = theme.save(&p) {
+                            self.log(format!("Could not remember theme: {e}"));
+                        }
+                    }
                 }
-            });
-        }
-        #[cfg(not(feature = "midi"))]
-        ui.label("This build has no MIDI backend. Build with --features midi.");
+            }
+        });
+        ui.small("Puppet · warm orange    Justice · pearl light    Kill · crimson    Lightning · plasma blue");
         ui.separator();
-        ui.label("Connect sends Universal Identity Request, reads communication level, then enables editor mode only for a recognized Gen 3 model. Disconnect disables editor mode. Audio DSP runs in the amplifier, not in this editor.");
-        ui.colored_label(Color32::YELLOW,"EXPERIMENTAL: the user reports the initial implementation works with their amp, but model/firmware, full write paths and vendor-file interoperability are not independently verified. Back up with Tone Studio before enabling saved writes.");
+        egui::CollapsingHeader::new("Backup & channel reads").show(ui, |ui| {
+            self.backup_page(ui);
+        });
+        egui::CollapsingHeader::new("Offline amp model").show(ui, |ui| {
+            ui.small("Used only when no amp is connected.");
+            egui::ComboBox::from_id_salt("offline-model")
+                .selected_text(crate::editor::model_name(self.offline_model))
+                .show_ui(ui, |ui| {
+                    for code in 5..=11 {
+                        ui.selectable_value(
+                            &mut self.offline_model,
+                            code,
+                            crate::editor::model_name(code),
+                        );
+                    }
+                });
+        });
+        egui::CollapsingHeader::new("Help & connection log").show(ui, |ui| {
+            ui.label("Rusty Boss · A BOSS KATANA editor for Linux. Currently supports Gen 3.");
+            ui.label("Experimental hardware support: keep a known-good backup before saving channels. MkI/MkII conversion and bulk restore are not available.");
+            ui.label("Independent software. Not affiliated with Roland/BOSS.");
+            egui::CollapsingHeader::new("Typeface license").show(ui, |ui| {
+                egui::ScrollArea::vertical().id_salt("font-license").max_height(180.).show(ui, |ui| {
+                    ui.small(wordmark::FONT_LICENSE);
+                });
+            });
+            for log in &self.logs { ui.small(log); }
+        });
+    }
+    fn backup_page(&mut self, ui: &mut egui::Ui) {
+        ui.label("Read saved channels without changing the amp's current sound.");
+        ui.horizontal_wrapped(|ui| {
+            egui::ComboBox::from_id_salt("read-slot")
+                .selected_text(slot_label(self.slot))
+                .show_ui(ui, |ui| {
+                    for n in 0..9 {
+                        if self.connected.as_ref().is_none_or(|id| id.slot_exists(n)) {
+                            ui.selectable_value(&mut self.slot, n, slot_label(n));
+                        }
+                    }
+                });
+            #[cfg(feature = "midi")]
+            if ui
+                .add_enabled(
+                    self.connected.is_some() && !self.busy,
+                    egui::Button::new("Copy channel to library"),
+                )
+                .clicked()
+            {
+                self.submit(Job::ReadSlot(self.slot));
+            }
+            #[cfg(feature = "midi")]
+            if ui
+                .add_enabled(
+                    self.connected.is_some() && !self.busy,
+                    egui::Button::new("Read full backup"),
+                )
+                .clicked()
+            {
+                self.submit(Job::Backup);
+            }
+        });
+        ui.small(
+            "Leave the amp idle during a full backup. Reads run sequentially, not as one snapshot.",
+        );
+        ui.horizontal(|ui| {
+            ui.label("Backup file:");
+            ui.text_edit_singleline(&mut self.backup_file);
+        });
+        ui.horizontal_wrapped(|ui| {
+            if ui
+                .add_enabled(!self.busy, egui::Button::new("Open ALB"))
+                .clicked()
+            {
+                match Backup::load(&PathBuf::from(&self.backup_file)) {
+                    Ok(b) => {
+                        self.backup = Some(b);
+                        self.log("Backup opened");
+                    }
+                    Err(e) => self.log(e.to_string()),
+                }
+            }
+            if ui
+                .add_enabled(
+                    self.backup.is_some() && !self.busy,
+                    egui::Button::new("Save ALB…"),
+                )
+                .clicked()
+            {
+                self.confirm = Some("save-backup".into());
+            }
+        });
+        let mut extract = None;
+        if let Some(b) = &self.backup {
+            for (slot, patch) in b.patches.iter().enumerate() {
+                if let Some(p) = patch {
+                    let patch = Patch {
+                        parameters: p.0.clone(),
+                        ..Patch::new(&self.schema).unwrap()
+                    };
+                    ui.horizontal(|ui| {
+                        ui.label(format!("{} · {}", slot_label(slot), patch.name()));
+                        if ui.button("Copy to library").clicked() {
+                            extract = Some(patch);
+                        }
+                    });
+                }
+            }
+        }
+        if let Some(mut p) = extract {
+            match p.complete(&self.schema) {
+                Ok(w) => {
+                    self.library.data[0].push(p);
+                    self.selected = self.library.data[0].len() - 1;
+                    self.dirty = true;
+                    self.disarm();
+                    self.log(format!(
+                        "Tone recovered ({} default-filled blocks)",
+                        w.len()
+                    ));
+                }
+                Err(e) => self.log(e.to_string()),
+            }
+        }
+        ui.small("Bulk restore is not available. You can recover individual tones and drag them to channels.");
     }
     fn confirmation(&mut self, ctx: &egui::Context) {
         let Some(action) = self.confirm.clone() else {
@@ -991,98 +1123,94 @@ impl App {
         };
         let mut yes = false;
         let mut no = false;
-        egui::Window::new("Confirm operation").collapsible(false).resizable(false).anchor(egui::Align2::CENTER_CENTER,[0.,0.]).show(ctx,|ui|{
-            let message=match action.as_str(){
-                "import"=>"Replace the current local liveset with the selected TSL file? Unsaved edits will be lost.",
-                "save"=>"Save the local liveset to the chosen TSL path? An existing file will be atomically replaced.",
-                "delete"=>"Delete this local patch? This cannot be undone.",
-                "read-current"=>"Replace the selected LOCAL patch with the amplifier's edit buffer? Unsaved local edits to that patch will be lost.",
-                "read-system"=>"Replace local system values with a fresh hardware read?",
-                "preview"=>"Send the entire local patch to the amplifier edit buffer? This changes the current sound and discards unsaved edits on the amp. Stored slots are not committed.",
-                "select"=>"Change the amplifier channel and replace the current local patch with its edit buffer? This can discard unsaved edits.",
-                "commit"=>"OVERWRITE the selected hardware channel with the amplifier's CURRENT edit buffer? This is persistent and cannot be undone. Have you read back and verified the sound?",
-                "save-backup"=>"Write the loaded/read backup to the chosen ALB path? An existing file will be replaced.",
-                "unlock"=>"Allow writes to saved amplifier presets and system settings? This removes preset protection. Keep this locked unless you have a verified backup.",_=>"Proceed?",
-            };
-            ui.set_max_width(490.);ui.label(message);
-            let phrase=if action=="unlock" {Some("ALLOW SAVED WRITES".to_owned())}else if action=="commit"{Some(slot_label(self.slot))}else{None};
-            if let Some(expected)=&phrase{ui.colored_label(Color32::YELLOW,format!("Type {expected} to confirm:"));ui.text_edit_singleline(&mut self.confirm_text);}
-            ui.horizontal(|ui|{yes=ui.add_enabled(phrase.as_ref().is_none_or(|p|self.confirm_text==*p),egui::Button::new("Confirm")).clicked();no=ui.button("Cancel").clicked();});
+        let modal = egui::Modal::new(egui::Id::new("confirm-operation")).show(ctx, |ui| {
+            ui.set_max_width(460.);
+            if action == "import-path" || action == "save-path" {
+                ui.heading(if action == "import-path" { "Import TSL" } else { "Save TSL file" });
+                ui.label("File path:"); ui.text_edit_singleline(&mut self.file);
+                ui.small(if action == "import-path" { "Replaces the local liveset. Save any unsaved work first. The amp is not changed until you click a tone in preview mode." } else { "Saves all local tones, including edits. An existing file at this path will be replaced." });
+            } else {
+                ui.heading("Confirm");
+                let message = match action.as_str() {
+                    "unlock" => "Enable channel writes? You will be able to overwrite saved tones by dropping them onto a channel. Each overwrite still asks first. Keep a backup.",
+
+                    "delete" => "Delete this local tone? This cannot be undone.",
+                    "save-backup" => "Save the backup ALB to the chosen path? An existing file will be replaced.",
+                    _ => "Continue?",
+                };
+                if action == "save-channel" {
+                    if let Some(r) = &self.pending_save {
+                        ui.label(format!("Save “{}” to {}?", r.patch.name(), slot_label(r.slot)));
+                        ui.label("This replaces the saved channel and changes the current amp sound. It cannot be undone without a backup.");
+                    }
+                } else { ui.label(message); }
+            }
+            ui.horizontal(|ui| {
+                yes = ui.add_enabled(!self.busy, egui::Button::new(if action == "import-path" { "Import" } else if action == "save-path" { "Save" } else { "Yes" })).clicked();
+                no = ui.button(if action.ends_with("-path") { "Cancel" } else { "No" }).clicked();
+            });
         });
-        if no {
+        if no || modal.should_close() {
             self.confirm = None;
-        }
-        if !yes {
+            self.pending_save = None;
             return;
         }
-        self.confirm = None;
-        match action.as_str() {
+        if yes {
+            self.confirm = None;
+            self.confirm_action(&action);
+        }
+    }
+    fn confirm_action(&mut self, action: &str) {
+        match action {
             "unlock" => {
-                self.disarm();
-                self.write_gate.set(Access::Persistent);
-                self.confirm_text.clear();
-                self.log("WARNING: persistent writes unlocked for this session");
+                self.set_access(Access::Persistent);
+                self.log("Channel writes enabled · Drag a tone onto a channel to save");
             }
-            "import" => match LiveSet::load(&PathBuf::from(&self.file), &self.schema) {
-                Ok((s, w)) => {
-                    self.library = s;
+            "import-path" => match LiveSet::load(&PathBuf::from(&self.file), &self.schema) {
+                Ok((library, warnings)) => {
+                    self.library = library;
                     self.selected = 0;
                     self.dirty = false;
                     self.disarm();
-                    self.log(format!(
-                        "Imported TSL ({} default-fill warnings). Hardware unchanged.",
-                        w.len()
-                    ));
+                    self.log(format!("TSL imported · {} tones · {} compatibility warnings · Click a tone to preview", self.library.data[0].len(), warnings.len()));
                 }
-                Err(e) => self.log(format!("{e:#}")),
+                Err(e) => self.log(format!("Import failed: {e:#}")),
             },
-            "save" => match self.library.save(&PathBuf::from(&self.file)) {
+            "save-path" => match self.library.save(&PathBuf::from(&self.file)) {
                 Ok(()) => {
                     self.dirty = false;
-                    self.log("TSL saved");
+                    self.log("TSL saved on your computer");
                 }
-                Err(e) => self.log(format!("{e:#}")),
+                Err(e) => self.log(format!("Save failed: {e:#}")),
             },
             "delete" => {
-                self.library.data[0].remove(self.selected);
-                self.selected = self
-                    .selected
-                    .min(self.library.data[0].len().saturating_sub(1));
-                self.dirty = true;
-                self.disarm();
+                if !self.library.data[0].is_empty() {
+                    self.library.data[0].remove(self.selected);
+                    self.selected = self
+                        .selected
+                        .min(self.library.data[0].len().saturating_sub(1));
+                    self.dirty = true;
+                    self.disarm();
+                }
             }
             "save-backup" => {
                 if let Some(b) = &self.backup {
-                    let r = b.save(&PathBuf::from(&self.backup_file));
-                    match r {
-                        Ok(()) => self.log("ALB saved"),
-                        Err(e) => self.log(format!("{e:#}")),
+                    match b.save(&PathBuf::from(&self.backup_file)) {
+                        Ok(()) => self.log("Backup saved"),
+                        Err(e) => self.log(e.to_string()),
                     }
                 }
             }
-            #[cfg(feature = "midi")]
-            "read-current" => {
-                self.disarm();
-                self.submit(Job::ReadCurrent);
-            }
-            #[cfg(feature = "midi")]
-            "read-system" => self.submit(Job::ReadSystem),
-            #[cfg(feature = "midi")]
-            "preview" => {
-                self.disarm();
-                if let Some(p) = self.library.data[0].get(self.selected).cloned() {
-                    self.submit(Job::Preview(p));
+            "save-channel" => {
+                if let Some(r) = self.pending_save.take() {
+                    if self.can_save_to(r.slot) {
+                        self.disarm();
+                        #[cfg(feature = "midi")]
+                        self.submit(Job::Save(r));
+                    } else {
+                        self.log("Save cancelled · Channel writes are locked or amp unavailable");
+                    }
                 }
-            }
-            #[cfg(feature = "midi")]
-            "select" => {
-                self.disarm();
-                self.submit(Job::Select(self.slot));
-            }
-            #[cfg(feature = "midi")]
-            "commit" => {
-                self.disarm();
-                self.submit(Job::Commit(self.slot));
             }
             _ => {}
         }
@@ -1092,30 +1220,46 @@ impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         #[cfg(feature = "midi")]
         self.events();
+        self.poll_file_dialog();
+        if !self.busy && self.confirm.is_none() {
+            if let Some(path) = ctx.input(|i| {
+                i.raw
+                    .dropped_files
+                    .iter()
+                    .filter_map(|f| f.path.clone())
+                    .find(|p| p.extension().is_some_and(|e| e.eq_ignore_ascii_case("tsl")))
+            }) {
+                self.file = path.to_string_lossy().into_owned();
+                self.import_file();
+            }
+        }
         self.header(ctx);
-        if self.page == Page::Editor || self.page == Page::System {
-            self.editor(ctx, self.page == Page::System);
-        } else {
-            egui::CentralPanel::default().show(ctx,|ui|{egui::ScrollArea::vertical().show(ui,|ui|{match self.page{
-                Page::Librarian=>{ui.add_enabled_ui(!self.busy, |ui|self.librarian(ui));},Page::Backup=>{ui.add_enabled_ui(!self.busy, |ui|self.backup_page(ui));},Page::Connection=>self.connection(ui),
-                Page::About=>{
-                    ui.heading("Rusty Boss 0.1.0");ui.label("Independent Rust + egui reconstruction. Not affiliated with Roland or BOSS.");
-                    ui.label("Recovered from BOSS TONE STUDIO for KATANA Gen 3 1.1.0 (26).");
-                    ui.label("106 parameter blocks • 2,463 parameter instances • Linux-first ALSA MIDI");
-                    ui.label("This is a working foundation, NOT a complete feature-parity release. See README.md and docs/PARITY.md for evidence, implemented behavior and remaining gaps.");
-                    ui.separator();ui.label("Implemented: offline parameter editing, named choices, local livesets and notes, Gen 3 TSL import/export, ALB reading/export and patch recovery, protocol codec and experimental MIDI reads/preview/commit.");
-                    ui.label("Standard editor: amp controls, algorithm-specific pages, green/red/yellow banks, finite display-unit tables, 9 chain patterns with position selectors, and basic model capabilities. Preset protection is enforced per outgoing packet.");
-                    ui.label("Still incomplete: bulk restore, legacy conversion, integrated cloud services, chain dragging, dynamic assignments, every coordinated-control rule and vendor-file interoperability. User-reported initial hardware success is not verification of every path.");
-                },_=>{},}});});
+        if self.page != Page::Settings {
+            self.preset_sidebar(ctx);
+        }
+        match self.page {
+            Page::Editor => self.classic_editor(ctx),
+            Page::Library => {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    egui::ScrollArea::vertical().show(ui, |ui| {
+                        ui.add_enabled_ui(!self.busy, |ui| self.library_page(ui));
+                    });
+                });
+            }
+            Page::Settings => {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    egui::ScrollArea::vertical().show(ui, |ui| self.connection(ui));
+                });
+            }
         }
         self.confirmation(ctx);
         #[cfg(feature = "midi")]
         self.flush_edits();
-        if self.busy {
-            ctx.request_repaint_after(std::time::Duration::from_millis(25));
+        ctx.request_repaint_after(std::time::Duration::from_millis(if self.busy {
+            25
         } else {
-            ctx.request_repaint_after(std::time::Duration::from_millis(100));
-        }
+            100
+        }));
         if std::env::var_os("RUSTY_BOSS_SMOKE_TEST").is_some() {
             self.smoke_frames += 1;
             let frames = std::env::var("RUSTY_BOSS_SMOKE_FRAMES")
@@ -1126,7 +1270,6 @@ impl eframe::App for App {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Close);
             }
         }
-        // Prevent a window-close from silently discarding local changes.
         if ctx.input(|i| i.viewport().close_requested())
             && self.dirty
             && std::env::var_os("RUSTY_BOSS_SMOKE_TEST").is_none()
@@ -1135,8 +1278,13 @@ impl eframe::App for App {
             self.close_dialog = true;
         }
         if self.close_dialog {
-            egui::Window::new("Unsaved liveset").show(ctx, |ui| {
-                ui.label("Save the liveset in Librarian before closing, or discard it.");
+            egui::Modal::new(egui::Id::new("unsaved-close")).show(ctx, |ui| {
+                ui.heading("Unsaved tones");
+                ui.label("Save your TSL file before closing?");
+                if ui.button("Save file…").clicked() {
+                    self.close_dialog = false;
+                    self.pick_file(true);
+                }
                 if ui.button("Discard and close").clicked() {
                     self.dirty = false;
                     self.close_dialog = false;
@@ -1160,177 +1308,4 @@ pub fn run() -> eframe::Result {
         },
         Box::new(|cc| Ok(Box::new(App::new(&cc.egui_ctx)))),
     )
-}
-#[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn render_every_editable_block_and_empty_library() {
-        let ctx = egui::Context::default();
-        let mut app = App::new(&ctx);
-        app.expert = true;
-        let ids: Vec<_> = app
-            .schema
-            .blocks
-            .iter()
-            .filter(|b| b.id.starts_with("PATCH%") || b.id.starts_with("SYSTEM%"))
-            .map(|b| b.id.clone())
-            .collect();
-        for id in ids {
-            let system = id.starts_with("SYSTEM%");
-            app.block = id;
-            let output = ctx.run(
-                egui::RawInput {
-                    screen_rect: Some(egui::Rect::from_min_size(
-                        egui::Pos2::ZERO,
-                        egui::vec2(1180., 800.),
-                    )),
-                    ..Default::default()
-                },
-                |ctx| {
-                    app.header(ctx);
-                    app.editor(ctx, system);
-                },
-            );
-            assert!(!output.shapes.is_empty());
-        }
-        app.library.data[0].clear();
-        let _ = ctx.run(Default::default(), |ctx| {
-            app.header(ctx);
-            app.editor(ctx, false);
-        });
-        let _ = ctx.run(Default::default(), |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
-                app.librarian(ui);
-                app.backup_page(ui);
-                app.connection(ui);
-            });
-        });
-        assert!(!app.live && app.connected.is_none());
-    }
-    fn render_standard(app: &mut App, ctx: &egui::Context) {
-        let out = ctx.run(
-            egui::RawInput {
-                screen_rect: Some(egui::Rect::from_min_size(
-                    egui::Pos2::ZERO,
-                    egui::vec2(1180., 800.),
-                )),
-                ..Default::default()
-            },
-            |ctx| {
-                app.header(ctx);
-                app.editor(ctx, false);
-            },
-        );
-        assert!(!out.shapes.is_empty());
-    }
-    #[test]
-    fn standard_pages_are_inert_in_every_algorithm_and_color() {
-        let ctx = egui::Context::default();
-        let mut app = App::new(&ctx);
-        assert_eq!(app.write_gate.access(), Access::ReadOnly);
-        #[cfg(feature = "midi")]
-        assert!(app.ports.is_empty());
-        for section in Section::ALL {
-            app.section = section;
-            let before = app.library.data[0][0].parameters.clone();
-            render_standard(&mut app, &ctx);
-            assert_eq!(app.library.data[0][0].parameters, before);
-        }
-        for model in 5..=11 {
-            app.offline_model = model;
-            for section in [Section::Amp, Section::Solo] {
-                app.section = section;
-                let before = app.library.data[0][0].parameters.clone();
-                render_standard(&mut app, &ctx);
-                assert_eq!(app.library.data[0][0].parameters, before);
-            }
-        }
-        for (section, count) in [
-            (Section::Mod, 31),
-            (Section::Fx, 31),
-            (Section::Delay, 8),
-            (Section::Delay2, 8),
-            (Section::Reverb, 5),
-            (Section::Eq, 2),
-            (Section::Eq2, 2),
-            (Section::Pedal, 3),
-            (Section::Booster, 23),
-        ] {
-            app.section = section;
-            for color in 0..3 {
-                if let Some(i) = section.color_index() {
-                    app.library.data[0][0]
-                        .parameters
-                        .get_mut("PATCH%COLOR")
-                        .unwrap()[i] = color;
-                }
-                for value in 0..count {
-                    let id = app.selector(section).unwrap();
-                    let c = app.remap_controls(section, app.catalog.control(id).unwrap());
-                    c.set(&app.schema, &mut app.library.data[0][0].parameters, value)
-                        .unwrap();
-                    let before = app.library.data[0][0].parameters.clone();
-                    render_standard(&mut app, &ctx);
-                    assert_eq!(
-                        app.library.data[0][0].parameters, before,
-                        "{section:?} color {color} value {value}"
-                    );
-                }
-            }
-        }
-        assert!(app.pending_edits.is_empty());
-        assert!(!app.dirty && !app.live && app.connected.is_none());
-    }
-    #[test]
-    fn responsive_standard_layout_keeps_unknown_panel_data_untouched() {
-        let ctx = egui::Context::default();
-        let mut app = App::new(&ctx);
-        app.library.data[0][0]
-            .parameters
-            .get_mut("PATCH%PATCH_KNOB_READONLY")
-            .unwrap()[4] = 127;
-        let before = app.library.data[0][0].parameters.clone();
-        for (width, height) in [(800., 560.), (1180., 800.), (1600., 1000.)] {
-            for section in Section::ALL {
-                app.section = section;
-                let out = ctx.run(
-                    egui::RawInput {
-                        screen_rect: Some(egui::Rect::from_min_size(
-                            egui::Pos2::ZERO,
-                            egui::vec2(width, height),
-                        )),
-                        ..Default::default()
-                    },
-                    |ctx| {
-                        app.header(ctx);
-                        app.editor(ctx, false);
-                    },
-                );
-                assert!(!out.shapes.is_empty());
-                assert_eq!(app.library.data[0][0].parameters, before);
-            }
-        }
-        assert!(app.pending_edits.is_empty());
-        assert!(!app.dirty);
-    }
-    #[test]
-    fn queued_edits_coalesce_by_field_and_disarming_drops_them() {
-        let ctx = egui::Context::default();
-        let mut app = App::new(&ctx);
-        app.write_gate.set(Access::EditBuffer);
-        app.live = true;
-        for (index, value) in [(0, 10), (1, 20), (0, 30)] {
-            app.record_edit(Edit {
-                block: "PATCH%AMP".into(),
-                index,
-                bytes: vec![value],
-            });
-        }
-        assert_eq!(app.pending_edits.len(), 2);
-        assert_eq!(app.pending_edits.back().unwrap().bytes, [30]);
-        app.disarm();
-        assert!(app.pending_edits.is_empty());
-        assert!(!app.synced && !app.live);
-    }
 }

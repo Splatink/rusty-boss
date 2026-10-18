@@ -7,14 +7,15 @@ not execution/behavioral equivalence of the original application.
 | Check | Result |
 |---|---|
 | `cargo fmt --check` (after formatting) | Passed |
-| `cargo test --locked` | **45 passed**: 31 unit/UI + 14 integration tests |
-| `cargo test --locked --no-default-features` | **41 passed**: 27 unit + 14 integration tests |
+| `cargo test --locked` | **64 passed**: 50 unit/UI + 14 integration tests |
+| `cargo test --locked --no-default-features` | **46 passed**: 32 unit + 14 integration tests |
+| `cargo test --locked --no-default-features --features gui` | **55 passed**: 41 unit/UI + 14 integration tests |
 | `cargo clippy --all-targets -- -D warnings` | Passed |
 | `cargo clippy --no-default-features --features gui --all-targets -- -D warnings` | Passed |
 | `cargo build --locked` | Passed |
-| `cargo build --release --locked` | Passed; native executable about 14 MiB |
+| `cargo build --release --locked` | Passed; native executable about 18 MiB (with native portal file chooser) |
 | Debug GUI four-frame startup/exit smoke | Exit 0 |
-| Release GUI startup/exit smoke | Exit 0; UI continuation also used isolated Xvfb, 80 frames and local MOD navigation, no port enumeration/connection |
+| Release GUI startup/exit smoke | Exit 0 for all four themes, isolated Xvfb, 50 frames each, no port enumeration/connection |
 | CLI `new` + `inspect` constructed Gen 3 TSL | Passed |
 | CLI `request 20000000 16` | Correct expected RQ1 bytes; not transmitted |
 | CLI `ports` (initial milestone only) | No duplex raw MIDI ports then; not repeated with the user\'s now-connected amp |
@@ -39,9 +40,30 @@ smoke test on a display-enabled host, use
   PANEL commits and nonexistent channel commits are rejected.
 - TSL and ALB constructed-file round trips, unknown-field preservation, hex bytes,
   null backup rows, reported default-tail fill, product/revision/size rejection.
-- Headless egui rendering of every patch/system block, empty library and auxiliary
-  pages; startup is offline. A real interactive usability/accessibility review is
-  still required.
+- Headless egui rendering of Editor/Library/Settings, empty libraries, all four
+  themes and auxiliary dialogs; startup is offline. Raw/system editing was removed
+  in the simplified UI. A real accessibility review is still required.
+- Actual egui pointer click and drag/drop events feed a fake MIDI job collector:
+  click previews, drop captures a patch/destination snapshot, No/Escape sends
+  nothing, Yes saves the captured snapshot without typed input.
+- Read-only/temporary/persistent permissions, latest pending preset wins,
+  stale preview completion cannot arm controls, reads preserve downloaded tones,
+  and busy/disconnect/error/lock prevent unsafe save submission.
+- Model-filtered channel-name reads emit only mock RQ1s. Store validates before
+  writing, previews the captured tone before one commit, never selects the
+  destination, and never commits after a preview failure or retries missing acks.
+- Large livesets keep preset rows and channel drop targets visible simultaneously.
+  Theme round trips/fallback and light/dark contrast are checked. Native portal
+  dialog selection itself isn't automated.
+- Header uses bundled Russo One through antialiased font rendering, replacing the
+  hard-edged, hand-triangulated spiked wordmark. Live DPI changes at 1×, 1.5×,
+  2×, 3× and back to 1× are tested in the same context: glyph atlas texel sizes
+  grow with DPI while logical dimensions remain stable. Body font metrics/styles
+  remain unchanged. All themes and constrained widths stay on one line.
+- Native screenshot checks cover every theme at 1×, Puppet/Justice at 2×, and
+  Puppet at 3×. The 2× run used a 3840×2160 Xvfb display; 3× used 3840×2560.
+  Captures are native rendering, not resized 1× images. The header-only 2× crop
+  is `docs/screenshots/wordmark-2x.png`. No amplifier traffic was sent.
 - Standard editor renders every recovered MOD/FX/delay/reverb/booster/EQ/pedal
   algorithm across color banks without changing a single parameter byte or
   queuing a write. Hidden bank/algorithm parameters remain intact.
@@ -55,7 +77,7 @@ smoke test on a display-enabled host, use
   PRESET assignment; recorded outgoing packet types and incoming checksums checked.
 - Panel-position regression: separate macro 50 / algorithm level 68, +1 wire bias,
   unavailable sentinel, invalid/missing/short data and read-only watcher policy.
-- All Standard sections also render at 800×560, 1180×800 and 1600×1000 without
+- All editor sections also render at 800×560, 1180×800 and 1600×1000 without
   modifying unknown panel bytes or enqueueing writes. These are render tests, not
   full automated layout/usability assertions. Offline desktop screenshots were
   checked at 1180×800; an overflowing centered-knob layout found there was corrected.
@@ -71,6 +93,12 @@ KATANA-50 reverb fixture is captured hardware traffic from our strict read-only
 probe; it establishes only that focused read slice. Other mock protocol tests do
 not prove the amplifier accepts or acknowledges their requests. The GUI smoke test proves startup/render/normal exit,
 not all interactions. Sequential backup reads are not an atomic snapshot.
+
+This usability pass sent no traffic to the connected amplifier. The earlier
+read-only reverb capture is separate. New logs use the `analysis/usability-*`
+prefix; the current typography/DPI checks use `analysis/brand-*` (earlier
+wordmark checks used `analysis/wordmark-*`). Release screenshots are in
+`docs/screenshots/{puppet,justice,kill,lightning}.png`.
 
 Command logs remain in the parent workspace's `analysis/` directory. Detailed
 static evidence is in `evidence/` and `docs/INVESTIGATION.md`.

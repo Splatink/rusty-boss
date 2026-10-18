@@ -16,6 +16,13 @@ Rust application and should not be redistributed as part of it without appropria
 rights. No original application license, artwork, fonts, branding assets or native
 bridge has been relicensed by this project.
 
+The header uses the unmodified **Russo One** typeface by Jovanny Lemonad,
+copyright (c) 2011–2012, under the SIL Open Font License 1.1 (Reserved Font Name:
+"Russo"). It is unrelated to the original BOSS application. The complete notice
+and license are in `assets/fonts/OFL-RussoOne.txt` and embedded in the app's
+Settings → Help & connection log → Typeface license. See `assets/fonts/README.md`
+for the pinned source and file hash.
+
 Third-party Rust dependencies retain their own licenses, available via the locked
 crate metadata. A release/distribution pass should review those notices and any
 applicable interoperability and redistribution requirements.
