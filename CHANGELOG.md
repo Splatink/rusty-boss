@@ -1,5 +1,20 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- Library saves stage only the chosen channel row before export, rather than
+  writing each preset through the active PANEL/edit buffer. Bulk saves use the
+  same path. Library previews switch from PANEL to A1 before writing tone data.
+- Channel clicks switch and read back the amp without creating library entries.
+  The editor keeps channel sounds and edits separate from library tones;
+  copying to the library remains an explicit action. Read-only clicks explain
+  why switching is blocked instead of silently copying.
+- Offline regressions cover four-channel saves from PANEL, preview isolation,
+  export failures and channel selection with a full library. Hardware persistence
+  and audible results remain unverified; no amplifier writes were used in testing.
+
 ## 1.0.0 — release preparation
 
 ### Updated

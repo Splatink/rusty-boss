@@ -207,8 +207,9 @@ impl App {
             .unwrap_or(self.offline_model)
     }
     fn patch_set(&self) -> Option<&ParamSet> {
-        self.library.data[0]
-            .get(self.selected)
+        self.channel_patch
+            .as_ref()
+            .or_else(|| self.library.data[0].get(self.selected))
             .map(|p| &p.parameters)
     }
     fn number(&self, block: &str, offset: usize) -> i32 {
@@ -250,7 +251,7 @@ impl App {
             .unwrap_or(0)
     }
     pub(super) fn record_edit(&mut self, edit: Edit) {
-        self.dirty = true;
+        self.dirty |= self.channel_patch.is_none();
         if self.live && self.write_gate.access() != Access::ReadOnly {
             self.pending_edits
                 .retain(|e| e.block != edit.block || e.index != edit.index);
@@ -260,7 +261,11 @@ impl App {
         }
     }
     fn set_control(&mut self, c: &Control, value: i32) {
-        let Some(p) = self.library.data[0].get_mut(self.selected) else {
+        let Some(p) = self
+            .channel_patch
+            .as_mut()
+            .or_else(|| self.library.data[0].get_mut(self.selected))
+        else {
             return;
         };
         match c.set(&self.schema, &mut p.parameters, value) {
@@ -289,10 +294,15 @@ impl App {
             .inner;
         if changed && new != value {
             // Update the local byte immediately, but only transmit a completed gesture.
-            if let Some(p) = self.library.data[0].get_mut(self.selected) {
+            let local = self.channel_patch.is_none();
+            if let Some(p) = self
+                .channel_patch
+                .as_mut()
+                .or_else(|| self.library.data[0].get_mut(self.selected))
+            {
                 match c.set(&self.schema, &mut p.parameters, new) {
                     Ok(_) => {
-                        self.dirty = true;
+                        self.dirty |= local;
                         if !self.live {
                             self.synced = false;
                         }
@@ -304,7 +314,10 @@ impl App {
         if finished
             && self.live
             && enabled
-            && let Some(p) = self.library.data[0].get_mut(self.selected)
+            && let Some(p) = self
+                .channel_patch
+                .as_mut()
+                .or_else(|| self.library.data[0].get_mut(self.selected))
             && let Ok(edit) = c.set(&self.schema, &mut p.parameters, new)
         {
             self.record_edit(edit);
@@ -902,14 +915,19 @@ impl App {
     }
     pub(super) fn classic_editor(&mut self, ui: &mut egui::Ui) {
         egui::CentralPanel::default().frame(egui::Frame::new().inner_margin(18).fill(ui.visuals().panel_fill)).show(ui, |ui| {
-            if self.library.data[0].is_empty() {
+            if self.channel_patch.is_none() && self.library.data[0].is_empty() {
                 ui.heading("Your next sound starts here");
                 ui.label("Import a Gen 3 TSL using the button on the left, or create a tone in Library.");
                 return;
             }
             ui.horizontal_wrapped(|ui| {
-                ui.heading(self.library.data[0][self.selected].name());
-                ui.label(RichText::new(if self.live { "● Live on amp" } else if self.connected.is_none() { "Local tone" } else { "Local · click tone to preview" }).size(12.).color(self.theme.accent()));
+                if let Some(p) = &self.channel_patch {
+                    ui.heading(format!("{} · {}", slot_label(self.slot), p.name()));
+                    ui.label("Amp sound · not in library");
+                } else {
+                    ui.heading(self.library.data[0][self.selected].name());
+                }
+                ui.label(RichText::new(if self.live { "● Live on amp" } else if self.connected.is_none() { "Local tone" } else if self.channel_patch.is_some() { "Read-only" } else { "Local · click tone to preview" }).size(12.).color(self.theme.accent()));
                 #[cfg(feature="midi")]
                 if ui.add_enabled(self.connected.is_some() && !self.busy, egui::Button::new("Copy amp sound")).on_hover_text("Read the current amp sound into a new local tone. Your existing tones are kept.").clicked() {
                     self.disarm(); self.submit(Job::ReadCurrent);

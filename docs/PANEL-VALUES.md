@@ -148,11 +148,13 @@ These are distinct concepts. **PANEL mode** is the amplifier's slot 0; the
 **PANEL** numbers on effect cards are last-read macro positions. The latter do
 not constitute a complete PANEL editor.
 
-Rusty Boss now includes PANEL (slot 0) in the channel rail for selection/read
-and confirmed drag-to-save. Persistent permission is required before the worker
-previews the captured tone and sends the same acknowledged write/export sequence
-with destination 0. Mock tests cover the packets and permission/confirmation flow.
-TEMP macro writes and continuous physical-knob monitoring remain unimplemented.
+Rusty Boss includes PANEL (slot 0) in the channel rail for selection and
+confirmed drag-to-save. Persistent permission is required before the worker
+stages the captured tone directly in the PANEL row and exports destination 0.
+A/B saves no longer preview through the active buffer, and library previews
+leave PANEL for A1 before sending tone data. Channel selection is separate from
+explicit library copying. See [PRESET-WORKFLOW.md](PRESET-WORKFLOW.md) for the
+corrected save path and its offline regression coverage.
 No hardware writes were used to validate this workflow.
 
 The earlier decision to reject PANEL saves is a Rusty Boss restriction, **not a
@@ -194,7 +196,8 @@ and `model_controller.js`; none was executed.
 - Offline input tests cover immediate post-click arrows on dial/numeric controls,
   repeated steps, range limits, disabled input and blur without phantom sends.
   An additional headless diagram drag checks local routing and queued edits.
-  Mock tests cover confirmed PANEL saves and the destination-0 write/export frames.
+  Mock tests now cover confirmed PANEL saves using destination-row staging and
+  destination-0 export rather than preview-then-PATCH_WRITE.
 
 No amplifier connection, requests or writes were used during this follow-up.
 TEMP macro editing, continuous physical-knob telemetry and hardware/reboot

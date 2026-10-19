@@ -8,7 +8,8 @@
 2. How does a library-to-channel drag identify its source and destination?
    **Answered at the controller/service boundary:** selected source cells and the
    destination instrument index feed export state, followed by `exportInst`.
-   Full lower-level staging/export internals were not newly traced here.
+   Follow-up direct source inspection traced the observer's destination-row
+   replacement/write and the subsequent single-row export (see Save below).
 3. How are channel names obtained? **Answered statically:** a dedicated name-read
    workflow updates the channel labels. Rusty Boss reads the known name field of
    each available saved slot without switching channels.
@@ -59,6 +60,9 @@ System editing is staged inside Settings rather than a raw/System top-level tab.
 - Startup is offline and read-only. Permissions remain explicit and visible.
 - With **Preview & edit**, clicking a preset captures it and immediately queues
   a temporary-buffer preview on the MIDI worker. No per-tone confirmation.
+  The worker reads the active channel first; if it is PANEL, it selects A1 and
+  confirms that transition before writing any preview parameters. This is a
+  deliberate PANEL-protection policy, not a claim about vendor preview behavior.
 - Readback follows preview automatically, as in the observed source workflow.
   The selected tone becomes live only after successful completion for the same
   generation. Existing extra fields and notes are retained.
@@ -79,27 +83,45 @@ System editing is staged inside Settings rather than a raw/System top-level tab.
   PANEL uses the same permission gate and confirmation as other destinations.
 - The overwrite modal names the tone and destination and offers **Yes / No**.
   No, Escape or dismissal sends no MIDI save job.
-- After Yes, the worker checks persistent permission before changing even the
-  temporary buffer. `Session::store_patch` validates destination and all writable
-  patch data, previews the captured snapshot and performs the existing commit
-  sequence. It does not select the destination and accidentally load its old sound.
-- If preview fails, no commit follows. No acknowledgements are retried. Success
-  updates the card's name; live controls stay linked only if the saved snapshot
-  matches the selected local tone.
+- After Yes, the worker checks persistent permission. `Session::store_patch`
+  validates the entire snapshot, stages its blocks directly in the destination
+  row, then mutes and requests one acknowledged single-row export (`40 <slot>`).
+  It never writes the active edit buffer or sends `PATCH_WRITE`. A/B channel
+  saves therefore do not use PANEL as scratch space, even immediately after reset.
+- If staging fails, no export follows. No acknowledgements are retried. Success
+  updates the card's name and disarms live controls; click the saved channel to
+  read and edit its actual sound rather than assuming its buffer matches.
 - Locking during a transaction is checked per outgoing packet. Sent packets
   cannot be recalled; cancellation/locking/error is not rollback. A failed save
   can leave an unknown hardware state. Disconnect/error resets UI permissions.
 
-This deliberately uses the existing validated temporary-buffer/commit primitives
-instead of copying the original multi-row library staging/export implementation.
-Hardware correctness of the existing commit sequence still needs authorized
-model/firmware-specific validation.
+The previous implementation used preview-then-commit and could send every tone
+through the currently active PANEL buffer. That path has been removed from
+library saves. Direct inspection of the supplied original app's
+`js/businesslogic/bts/librarian/librarian_services.js:55–88` shows the export
+observer replacing and writing destination rows; `js/common/librarian.js:65–103`
+builds those row writes. `librarian_services.js:362–385` and
+`js/businesslogic/bts/patch_controller.js:341–356` then perform single-row export.
+Rusty Boss retains its own validation, packet chunking and per-packet permission
+gate, and exports each bulk-save destination separately. Static source and mock
+checks do not establish firmware persistence or rule out all hardware side effects.
+
+### Channel selection is not library import
+
+Clicking an available channel with Preview & edit or persistent permission
+queues only channel selection and current-sound readback. The editor holds that
+sound in a transient snapshot, highlights the channel and labels it **not in
+library**. Knob edits, coordinated readbacks and device updates use that snapshot,
+not the previously selected library tone. Switching works even with a full
+collection. Only explicit **Copy amp sound** / channel-copy actions append tones.
+Read-only channel clicks explain that switching is blocked; they never substitute
+a library copy for the requested switch.
 
 ### Files and appearance
 
 Native XDG-portal file choosers run off the UI thread. TSL file-drop import is also
 supported. Import adds/activates a new collection without discarding existing
-ones; reads of the current amp sound create a new local tone. Local collections
+ones; explicit copies of the current amp sound create a new local tone. Local collections
 autosave; explicit TSL export is still different from saving a channel.
 
 Puppet (default), Kill and Lightning are dark. Justice is pearl white with pale

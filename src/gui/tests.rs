@@ -435,19 +435,82 @@ fn real_pointer_click_and_drag_drop_use_the_same_safe_workflow() {
 
 #[cfg(feature = "midi")]
 #[test]
-fn channel_clicks_read_without_switching_when_protected_and_select_when_previewing() {
+fn channel_clicks_only_switch_and_never_copy_even_with_a_full_library() {
     let ctx = egui::Context::default();
     let mut app = App::new(&ctx);
     let jobs = fake_connected(&mut app);
     app.choose_channel(3);
     assert!(jobs.try_recv().is_err()); // Absent on KATANA-50.
     app.choose_channel(1);
-    assert!(matches!(jobs.try_recv().unwrap(), Job::ReadSlot(1)));
-    app.handle_event(Event::Slot(1, named(&app, "Read channel")));
+    assert!(jobs.try_recv().is_err()); // Read-only never silently means Copy.
+    assert!(app.status.contains("Preview & edit"));
+    let tone = app.library.data[0][0].clone();
+    app.library.data[0].resize(1000, tone);
+    let before = serde_json::to_vec(&app.library).unwrap();
+    app.dirty = false;
+    for access in [Access::EditBuffer, Access::Persistent] {
+        app.set_access(access);
+        for slot in [0, 1, 5, 1] {
+            app.choose_channel(slot);
+            assert!(matches!(jobs.try_recv().unwrap(), Job::Select(n) if n == slot));
+            app.handle_event(Event::Selected(slot, named(&app, "Amp channel")));
+            assert_eq!(app.channel_patch.as_ref().unwrap().name(), "Amp channel");
+            assert!(app.live && app.synced && !app.dirty);
+            assert!(app.confirm.is_none());
+            assert_eq!(serde_json::to_vec(&app.library).unwrap(), before);
+        }
+    }
+    // Previewing a library tone leaves the transient amp editor behind.
+    app.choose_preset(0);
+    assert!(app.channel_patch.is_none());
+    assert!(matches!(jobs.try_recv().unwrap(), Job::Preview(_)));
+}
+#[cfg(feature = "midi")]
+#[test]
+fn selected_channel_edits_and_readbacks_never_mutate_a_library_tone() {
+    let ctx = egui::Context::default();
+    let mut app = App::new(&ctx);
+    let jobs = fake_connected(&mut app);
     app.set_access(Access::EditBuffer);
-    app.choose_channel(5);
-    assert!(matches!(jobs.try_recv().unwrap(), Job::Select(5)));
-    assert!(app.confirm.is_none());
+    app.handle_event(Event::Selected(1, named(&app, "Amp channel")));
+    app.dirty = false;
+    let before = serde_json::to_vec(&app.library).unwrap();
+    let c = app.catalog.control("panel-amp-gain-knob").unwrap();
+    let edit = c
+        .set(
+            &app.schema,
+            &mut app.channel_patch.as_mut().unwrap().parameters,
+            73,
+        )
+        .unwrap();
+    app.record_edit(edit);
+    app.flush_edits();
+    assert!(matches!(jobs.try_recv().unwrap(), Job::Set(_, _, _, _)));
+    let values = app.channel_patch.as_ref().unwrap().parameters.clone();
+    app.handle_event(Event::Refreshed(app.generation, values));
+    app.handle_event(Event::Update(Message::Data {
+        device: 16,
+        address: crate::protocol::Address::new(app.schema.block(&c.block).unwrap().address)
+            .unwrap()
+            .plus(c.offset)
+            .unwrap(),
+        data: vec![74],
+    }));
+    assert_eq!(
+        c.value(&app.schema, &app.channel_patch.as_ref().unwrap().parameters)
+            .unwrap(),
+        74
+    );
+    assert_eq!(serde_json::to_vec(&app.library).unwrap(), before);
+    assert!(!app.dirty);
+    render(&mut app, &ctx, 1180., 800.);
+    app.set_access(Access::ReadOnly);
+    assert!(app.channel_patch.is_some() && !app.live);
+    // Only the explicit copy action creates a library entry.
+    app.handle_event(Event::Current(app.channel_patch.as_ref().unwrap().clone()));
+    assert_eq!(app.library.data[0].len(), 2);
+    assert_eq!(app.library.data[0][1].name(), "Amp channel");
+    assert!(app.channel_patch.is_none());
 }
 #[cfg(feature = "midi")]
 #[test]

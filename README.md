@@ -26,16 +26,19 @@ outside this app's scope.
    your existing tones are kept.
 3. **Choose “Preview & edit.”** Click a tone in **My tones** to hear it on your
    amp. Amp knobs and effects become live after the preview is read back.
-   Click another tone to try it. **Your saved channels are unchanged.**
+   Click another tone to try it. **Your saved channels are unchanged.** If PANEL
+   is active, the app first switches to A1 so PANEL is not used as a scratch buffer.
 4. **Keep a favorite.** Click **Enable amp writes…** and answer **Yes**.
    Drag a tone from **My tones** onto an **Amp channel**, then answer **Yes** to
    the overwrite confirmation. That's it—no typed unlock phrases and no manual
    buffer-commit steps.
 5. Click **Amp writes enabled · Lock** when you're done saving.
 
-Saving a channel changes the amp's current sound and replaces that channel's
-previous tone. The app saves the tone you dragged, not an unrelated sound that
-happens to be in the amp buffer. **PANEL is also a selectable save destination.**
+Saving replaces only the chosen channel's previous tone and may change the
+current sound. The app stages the tone you dragged directly in that channel,
+not in the current PANEL/edit buffer. **Saving A/B channels does not stage
+preset data in PANEL.** Saving to PANEL itself still requires an explicit
+PANEL destination and overwrite confirmation.
 
 > **Keep a backup.** Hardware support is still experimental. Make a known-good
 > backup with BOSS Tone Studio before overwriting channels, and don't use Rusty
@@ -64,8 +67,11 @@ change tone parameters or select a channel.
   mode switch.
 - **My tones + Amp channels:** a single place to choose, audition and drag-save
   presets. Channel names are read when you connect; available channels follow
-  your amp model. Clicking a channel copies it locally in read-only mode; in
-  preview mode it switches the amp to that saved sound.
+  your amp model. With **Preview & edit** or amp writes enabled, clicking a
+  channel switches to it and displays its sound without adding or changing any
+  library tones. In **Read-only**, switching is blocked with an explanation;
+  clicking never silently copies a channel. Use **Copy amp sound** or the
+  explicit channel-copy controls to add a library tone.
 - **Library:** automatically saved collections; rename, annotate, duplicate,
   reorder or delete tones. Open **Select & transfer tones** for multiselect,
   collection-to-collection copy/move and selected amp-channel import/export.
@@ -91,8 +97,8 @@ backup and do not retry a failed restore blindly.
 
 ### PANEL support today
 
-Click **PANEL** under **Amp channels** to select it (or copy it locally in
-read-only mode). To save your chosen effects and assignments, edit a local tone,
+With **Preview & edit**, click **PANEL** under **Amp channels** to select it.
+To save your chosen effects and assignments, edit a local tone,
 enable channel writes, drag it onto **PANEL**, and confirm the overwrite.
 This saves the whole tone snapshot, not just one effect. Physical knobs can
 override panel-controlled values; reboot persistence has not been independently

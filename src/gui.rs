@@ -95,6 +95,7 @@ enum Event {
     Connected(Identity),
     Disconnected,
     Current(Patch),
+    Selected(usize, Patch),
     Slot(usize, Patch),
     ChannelNames([Option<String>; 9]),
     Previewed(u64, ParamSet),
@@ -189,10 +190,13 @@ impl Worker {
                                 }
                                 Job::Select(n) => {
                                     s.select_slot(n)?;
-                                    Event::Current(Patch {
-                                        parameters: s.read_root(&schema, "PATCH")?,
-                                        ..Patch::new(&schema)?
-                                    })
+                                    Event::Selected(
+                                        n,
+                                        Patch {
+                                            parameters: s.read_root(&schema, "PATCH")?,
+                                            ..Patch::new(&schema)?
+                                        },
+                                    )
                                 }
                                 Job::Preview(r) => {
                                     s.preview(&schema, &r.patch)?;
@@ -347,6 +351,7 @@ struct App {
     pending_preview: Option<PreviewRequest>,
     pending_save: Option<SaveRequest>,
     channel_names: [Option<String>; 9],
+    channel_patch: Option<Patch>,
     library: Library,
     library_path: Option<PathBuf>,
     library_error: Option<String>,
@@ -413,6 +418,7 @@ impl App {
             pending_preview: None,
             pending_save: None,
             channel_names: Default::default(),
+            channel_patch: None,
             library,
             library_path,
             library_error,
@@ -539,6 +545,7 @@ impl App {
         self.logs.truncate(100);
     }
     fn disarm(&mut self) {
+        self.channel_patch = None;
         self.live = false;
         self.synced = false;
         self.pending_edits.clear();
@@ -548,7 +555,9 @@ impl App {
     fn set_access(&mut self, access: Access) {
         // An acknowledged in-flight preview must not re-arm after protection changes.
         let resume = self.synced && self.connected.is_some() && !self.busy;
+        let channel_patch = self.channel_patch.take();
         self.disarm();
+        self.channel_patch = channel_patch;
         self.write_gate.set(access);
         self.synced = resume;
         self.live = resume && access != Access::ReadOnly;
@@ -608,10 +617,6 @@ impl App {
         }
     }
     fn choose_channel(&mut self, slot: usize) {
-        if self.library.data[0].len() >= 1000 {
-            self.log("This collection is full; choose another collection first");
-            return;
-        }
         if self.busy
             || !self
                 .connected
@@ -620,14 +625,14 @@ impl App {
         {
             return;
         }
+        if self.write_gate.access() == Access::ReadOnly {
+            self.log("Read-only · Choose Preview & edit to switch amp channels. Nothing was copied or saved.");
+            return;
+        }
         self.slot = slot;
         self.disarm();
         #[cfg(feature = "midi")]
-        self.submit(if self.write_gate.access() == Access::ReadOnly {
-            Job::ReadSlot(slot)
-        } else {
-            Job::Select(slot)
-        });
+        self.submit(Job::Select(slot));
     }
     fn can_save_to(&self, slot: usize) -> bool {
         !self.busy
@@ -680,10 +685,14 @@ impl App {
             Event::Refreshed(generation, mut values) => {
                 if generation == self.generation && self.write_gate.access() != Access::ReadOnly {
                     overlay_pending_edits(&self.schema, &mut values, &self.pending_edits);
-                    if let Some(patch) = self.library.data[0].get_mut(self.selected) {
+                    if let Some(patch) = self
+                        .channel_patch
+                        .as_mut()
+                        .or_else(|| self.library.data[0].get_mut(self.selected))
+                    {
                         patch.parameters.extend(values);
                     }
-                    self.dirty = true;
+                    self.dirty |= self.channel_patch.is_none();
                     self.synced = true;
                     self.live = true;
                     self.log("Sound synchronized with amp · Saved channels unchanged");
@@ -731,6 +740,14 @@ impl App {
                 self.write_gate.set(Access::ReadOnly);
                 self.channel_names = Default::default();
                 self.log("Disconnected · Read-only protection restored");
+            }
+            Event::Selected(slot, p) => {
+                self.disarm();
+                self.slot = slot;
+                self.channel_patch = Some(p);
+                self.synced = true;
+                self.live = self.write_gate.access() != Access::ReadOnly;
+                self.log(format!("{} selected · Nothing copied or saved · Use Copy amp sound to keep a library copy", slot_label(slot)));
             }
             Event::Current(p) => {
                 if self.library.data[0].len() >= 1000 {
@@ -786,20 +803,10 @@ impl App {
             Event::Saved(r) => {
                 let name = r.patch.name();
                 self.channel_names[r.slot] = Some(name.clone());
-                let matching = self.library.data[0]
-                    .get(self.selected)
-                    .is_some_and(|p| p.parameters == r.patch.parameters);
                 self.disarm();
-                self.synced = matching;
-                self.live = matching && self.write_gate.access() != Access::ReadOnly;
                 self.log(format!(
-                    "Saved {name} to {}{}",
-                    slot_label(r.slot),
-                    if self.live {
-                        " · Knobs are live"
-                    } else {
-                        " · Click a tone to preview"
-                    }
+                    "Saved {name} to {} · Click the channel to hear and edit it",
+                    slot_label(r.slot)
                 ));
             }
             Event::Backup(b) => {
@@ -833,8 +840,12 @@ impl App {
                     self.log("Amp channel changed · Click a tone to preview or copy the amp sound");
                     return;
                 }
+                let local = self.channel_patch.is_none();
                 if self.synced
-                    && let Some(patch) = self.library.data[0].get_mut(self.selected)
+                    && let Some(patch) = self
+                        .channel_patch
+                        .as_mut()
+                        .or_else(|| self.library.data[0].get_mut(self.selected))
                 {
                     let address = address.linear() as usize;
                     for block in self
@@ -854,7 +865,7 @@ impl App {
                         {
                             dst[start - base..end - base]
                                 .copy_from_slice(&data[start - address..end - address]);
-                            self.dirty = true;
+                            self.dirty |= local;
                         }
                     }
                     overlay_pending_edits(&self.schema, &mut patch.parameters, &self.pending_edits);
@@ -945,7 +956,7 @@ impl App {
             let r = ui.add_enabled(
                 !self.busy || self.previewing,
                 egui::Button::new(format!("{:02}   {}", i + 1, p.name()))
-                    .selected(i == self.selected)
+                    .selected(self.channel_patch.is_none() && i == self.selected)
                     .sense(egui::Sense::click_and_drag())
                     .min_size(egui::vec2(ui.available_width(), 34.)),
             );
@@ -972,10 +983,10 @@ impl App {
             ui.weak("Connect your amp in Settings to see its channels.");
             return;
         }
-        ui.small(if self.write_gate.access() == Access::Persistent {
-            "Drag a tone here to save it."
-        } else {
-            "Saved channels locked. Enable amp writes to save a tone."
+        ui.small(match self.write_gate.access() {
+            Access::ReadOnly => "Choose Preview & edit to switch channels.",
+            Access::EditBuffer => "Click to switch. Enable amp writes to drag-save.",
+            Access::Persistent => "Click to switch. Drag a tone here to save it.",
         });
         for slot in 0..9 {
             if !self
@@ -991,8 +1002,11 @@ impl App {
                 Some(name) => format!("{}   {name}", slot_label(slot)),
                 None => slot_label(slot),
             };
-            let r =
-                ui.add(egui::Button::new(title).min_size(egui::vec2(ui.available_width(), 32.)));
+            let r = ui.add(
+                egui::Button::new(title)
+                    .selected(self.channel_patch.is_some() && self.slot == slot)
+                    .min_size(egui::vec2(ui.available_width(), 32.)),
+            );
             if hovering && r.contains_pointer() {
                 ui.painter().rect_stroke(
                     r.rect,
@@ -1015,7 +1029,7 @@ impl App {
                 self.choose_channel(slot);
             }
             r.on_hover_text(if self.write_gate.access() == Access::ReadOnly {
-                "Click to copy this channel into your library without changing the amp. Saving is locked."
+                "Choose Preview & edit to switch channels. Copying to the library is a separate action in Settings."
             } else if can_save {
                 "Drop a library tone to save. Click to hear this channel (discards unsaved amp-buffer edits)."
             } else {

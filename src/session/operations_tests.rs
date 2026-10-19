@@ -172,7 +172,112 @@ fn bulk_save_preflights_every_tone_and_stops_on_failure() {
         s.store_patches(&schema, &[(1, patch.clone()), (2, patch)], |_, _| {})
             .is_err()
     );
-    assert!(!s.transport.sent.iter().any(|m| matches!(m, Message::Data { address, .. } if *address == Address::packed(0x7f000104).unwrap())));
+    assert!(!s.transport.sent.iter().any(|m| matches!(m, Message::Data { address, .. } if [0x7f000104, 0x7f01010a].into_iter().any(|a| *address == Address::packed(a).unwrap()))));
+}
+#[test]
+fn four_channel_saves_leave_panel_and_other_slots_untouched() {
+    let schema = Schema::load();
+    let panel = Patch::new(&schema).unwrap();
+    let mut s = session();
+    s.identity.model_code = 5;
+    s.identity.name = "KATANA-50";
+    // Start on PANEL, as after a factory reset. Seed every saved row and the edit buffer.
+    for base in std::iter::once(Address::packed(0x20000000).unwrap())
+        .chain((0..9).map(|slot| slot_address(slot).unwrap()))
+    {
+        for (address, data) in Session::<Memory>::patch_tasks(&schema, &panel, base, true).unwrap()
+        {
+            for (i, byte) in data.into_iter().enumerate() {
+                s.transport.bytes.insert(address.linear() + i as u32, byte);
+            }
+        }
+    }
+    let before = s.transport.bytes.clone();
+    let patches: Vec<_> = [1, 2, 5, 6]
+        .into_iter()
+        .map(|slot| {
+            let mut p = panel.clone();
+            p.rename(&schema, &format!("Channel {slot}")).unwrap();
+            p.parameters.get_mut("PATCH%COLOR").unwrap()[1] = 2;
+            (slot, p)
+        })
+        .collect();
+    s.store_patches(&schema, &patches, |_, _| {}).unwrap();
+    let mut expected = before;
+    for (slot, patch) in &patches {
+        for (address, data) in
+            Session::<Memory>::patch_tasks(&schema, patch, slot_address(*slot).unwrap(), true)
+                .unwrap()
+        {
+            for (i, byte) in data.into_iter().enumerate() {
+                expected.insert(address.linear() + i as u32, byte);
+            }
+        }
+    }
+    // Ignore command registers; all tone memory must match exactly, including PANEL chorus banks.
+    for (address, byte) in &expected {
+        assert_eq!(
+            s.transport.bytes.get(address),
+            Some(byte),
+            "address {address:x}"
+        );
+    }
+    let mut exports = Vec::new();
+    for m in &s.transport.sent {
+        if let Message::Data { address, data, .. } = m {
+            if *address == Address::packed(0x7f01010a).unwrap() {
+                exports.push(data.clone());
+            } else if *address != Address::packed(0x7f010109).unwrap() {
+                assert!(
+                    patches.iter().any(|(slot, _)| {
+                        let start = slot_address(*slot).unwrap().linear();
+                        (start..start + 0x40000).contains(&address.linear())
+                    }),
+                    "unexpected write to {address}"
+                );
+            }
+        }
+    }
+    assert_eq!(
+        exports,
+        [vec![64, 1], vec![64, 2], vec![64, 5], vec![64, 6]]
+    );
+}
+#[test]
+fn library_preview_leaves_panel_before_writing_and_keeps_saved_rows_unchanged() {
+    let schema = Schema::load();
+    let patch = Patch::new(&schema).unwrap();
+    for current in [0, 2] {
+        let mut s = session();
+        s.transport.bytes.insert(1, current);
+        s.preview(&schema, &patch).unwrap();
+        let selected = if current == 0 { 1 } else { current };
+        assert_eq!(s.transport.bytes[&1], selected);
+        let first_patch = s.transport.sent.iter().position(|m| matches!(m, Message::Data { address, .. } if *address == Address::packed(0x20000000).unwrap())).unwrap();
+        assert_eq!(first_patch, if current == 0 { 3 } else { 1 });
+        for m in &s.transport.sent[first_patch..] {
+            assert!(
+                matches!(m, Message::Data { address, .. } if (Address::packed(0x20000000).unwrap().linear()..slot_address(0).unwrap().linear()).contains(&address.linear()))
+            );
+        }
+    }
+    let mut s = session();
+    s.transport.fail_at = Some(2); // Cannot confirm leaving PANEL.
+    assert!(s.preview(&schema, &patch).is_err());
+    assert_eq!(s.transport.sent.len(), 2);
+    assert!(!s.transport.sent.iter().any(|m| matches!(m, Message::Data { address, .. } if *address == Address::packed(0x20000000).unwrap())));
+    for current in [[0, 9], [1, 1]] {
+        let mut s = session();
+        s.transport.bytes.insert(0, current[0]);
+        s.transport.bytes.insert(1, current[1]);
+        assert!(s.preview(&schema, &patch).is_err());
+        assert!(
+            s.transport
+                .sent
+                .iter()
+                .all(|m| matches!(m, Message::Request { .. }))
+        );
+    }
 }
 #[test]
 fn restore_preflight_is_all_or_nothing_and_never_accepts_other_models() {
