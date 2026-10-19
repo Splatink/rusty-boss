@@ -128,6 +128,11 @@ impl LiveSet {
     }
     pub fn load(path: &Path, schema: &Schema) -> Result<(Self, Vec<String>)> {
         let mut s: Self = read_json(path)?;
+        let warnings = s.validate(schema)?;
+        Ok((s, warnings))
+    }
+    pub fn validate(&mut self, schema: &Schema) -> Result<Vec<String>> {
+        let s = self;
         ensure!(
             s.device == DEVICE,
             "unsupported device {}; MkI/MkII conversion is not implemented",
@@ -150,7 +155,7 @@ impl LiveSet {
                     .map(|w| format!("Patch {}: {w}", i + 1)),
             );
         }
-        Ok((s, warnings))
+        Ok(warnings)
     }
     pub fn save(&self, path: &Path) -> Result<()> {
         atomic_json(path, self)
@@ -200,6 +205,10 @@ pub fn read_json<T: serde::de::DeserializeOwned>(path: &Path) -> Result<T> {
 /// filename, symlink-following overwrite, or cross-filesystem rename.
 pub fn atomic_json<T: Serialize>(path: &Path, value: &T) -> Result<()> {
     let bytes = serde_json::to_vec_pretty(value)?;
+    ensure!(
+        bytes.len() <= 16 * 1024 * 1024,
+        "Document exceeds 16 MiB; split large collections before exporting"
+    );
     let parent = path
         .parent()
         .filter(|p| !p.as_os_str().is_empty())
@@ -258,6 +267,16 @@ mod tests {
         p.parameters.get_mut("PATCH%AMP").unwrap().truncate(1);
         assert_eq!(p.complete(&s).unwrap().len(), 1);
         assert_eq!(p.parameters["PATCH%AMP"].len(), 10);
+    }
+    #[test]
+    fn oversized_exports_cannot_replace_a_readable_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("tones.tsl");
+        atomic_json(&path, &"keep this file").unwrap();
+        let original = fs::read(&path).unwrap();
+        assert!(atomic_json(&path, &"x".repeat(16 * 1024 * 1024)).is_err());
+        assert_eq!(fs::read(&path).unwrap(), original);
+        assert_eq!(read_json::<String>(&path).unwrap(), "keep this file");
     }
     #[test]
     fn backup_roundtrip() {

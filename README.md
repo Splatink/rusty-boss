@@ -13,7 +13,7 @@ presets. Shape your sound with amp knobs and effect controls, try downloaded ton
 and save your favorites straight to your amp—without Wine or Windows.
 
 **Currently supports KATANA Gen 3.** MkI and MkII amps and preset conversion are
-not supported yet.
+outside this app's scope.
 
 ![Rusty Boss with the default Puppet theme](docs/screenshots/puppet.png)
 
@@ -22,19 +22,20 @@ not supported yet.
 1. **Connect your amp by USB.** In **Settings**, refresh the MIDI ports, choose
    the Katana's control port, and click **Connect**.
 2. **Import your tones.** Click **Import TSL…** and choose a Gen 3 `.tsl` file.
-   You can also drop the file onto the app window.
+   You can also drop the file onto the app window. Each import adds a collection;
+   your existing tones are kept.
 3. **Choose “Preview & edit.”** Click a tone in **My tones** to hear it on your
    amp. Amp knobs and effects become live after the preview is read back.
    Click another tone to try it. **Your saved channels are unchanged.**
-4. **Keep a favorite.** Click **Enable channel writes…** and answer **Yes**.
+4. **Keep a favorite.** Click **Enable amp writes…** and answer **Yes**.
    Drag a tone from **My tones** onto an **Amp channel**, then answer **Yes** to
    the overwrite confirmation. That's it—no typed unlock phrases and no manual
    buffer-commit steps.
-5. Click **Channel writes enabled · Lock** when you're done saving.
+5. Click **Amp writes enabled · Lock** when you're done saving.
 
 Saving a channel changes the amp's current sound and replaces that channel's
 previous tone. The app saves the tone you dragged, not an unrelated sound that
-happens to be in the amp buffer. **PANEL is not a save destination.**
+happens to be in the amp buffer. **PANEL is also a selectable save destination.**
 
 > **Keep a backup.** Hardware support is still experimental. Make a known-good
 > backup with BOSS Tone Studio before overwriting channels, and don't use Rusty
@@ -49,7 +50,7 @@ The controls at the top tell you what the app is allowed to change:
 |---|---|
 | **Read-only** | Browse tones locally and read the amp. Clicking a tone does not change the amp's sound. Preview, live knobs, channel switching and saved-channel writes are blocked. |
 | **Preview & edit** | Click a tone to hear it and adjust the current sound. Saved channels remain protected. |
-| **Channel writes enabled** | Allows saving tones to channels, with a Yes/No confirmation for each overwrite. |
+| **Amp writes enabled** | Allows confirmed channel saves, system-setting Apply and full restore. Each destructive operation still asks first. |
 
 The app starts in **Read-only** every time. It never connects automatically and
 never remembers permission to write. Connecting in read-only still sends the
@@ -65,40 +66,71 @@ change tone parameters or select a channel.
   presets. Channel names are read when you connect; available channels follow
   your amp model. Clicking a channel copies it locally in read-only mode; in
   preview mode it switches the amp to that saved sound.
-- **Library:** rename tones, keep notes, duplicate, reorder or delete them.
-- **Settings:** USB-MIDI connection, appearance, and optional backup tools.
-  There is no separate System tab or system-parameter editing screen.
+- **Library:** automatically saved collections; rename, annotate, duplicate,
+  reorder or delete tones. Open **Select & transfer tones** for multiselect,
+  collection-to-collection copy/move and selected amp-channel import/export.
+- **Settings:** connection and appearance up front. **Amp settings** and
+  **Backup & channel reads** stay collapsed until you need them. There are no
+  extra top-level tabs or raw parameter screens.
 
 Turn a knob by dragging up/down. Focus it and use arrow keys for small changes,
 or click the value to type an exact number. Effect cards and section buttons
-open the corresponding controls.
+open the corresponding controls. In **CHAIN** or **Signal path**, drag a movable
+block onto another block to place it immediately after that block. Legal targets
+are highlighted; unsupported routes are not applied. Right-click a movable block
+for its available destinations, or use the chain-pattern/position selectors.
 
 **Copy amp sound** reads the current sound into a new local tone—it does not
 replace the downloaded tone you were editing. In **Settings → Backup & channel
 reads**, you can copy an individual saved channel without switching the amp,
 read a full backup, open/save `.alb` files, and recover individual tones.
-Bulk backup restore is not available.
+**Restore full backup…** replaces system settings, PANEL and all saved channels;
+only backups from the exact connected model are accepted. Restore is experimental
+and hardware-unverified. Cancellation is not rollback: keep a separate known-good
+backup and do not retry a failed restore blindly.
 
 ### PANEL support today
 
-The full PANEL workflow is **not implemented yet**. If you select PANEL on the
-amp itself, **Copy amp sound** and **Preview & edit** can edit its current sound.
-But PANEL isn't a selectable/save target in the app, and saving effect assignments
-to PANEL for the next power-on isn't supported. This is an app limitation, not
-an amplifier limitation. The effect cards' **PANEL** values are snapshot readouts,
-not editable or continuously monitored physical-knob controls.
+Click **PANEL** under **Amp channels** to select it (or copy it locally in
+read-only mode). To save your chosen effects and assignments, edit a local tone,
+enable channel writes, drag it onto **PANEL**, and confirm the overwrite.
+This saves the whole tone snapshot, not just one effect. Physical knobs can
+override panel-controlled values; reboot persistence has not been independently
+hardware-tested. The effect cards' **PANEL** knobs become editable after preview.
+These are firmware macros, not aliases for Effect Level; related parameters are
+read back after a completed gesture. Device watcher notifications update them
+while live, but they are not continuously polled physical-position meters.
 
-### Saving files vs. saving channels
+### Collections, files and amp channels
 
-- **Save file…** writes your local liveset, including edited tones, to a `.tsl`
-  file on your computer. It does **not** save a channel on the amplifier.
-- **Drag a tone onto an Amp channel** to save it on the amplifier.
-- Importing a TSL replaces the currently open local liveset. Save your work first;
-  the app asks before discarding unsaved local edits.
-- Local edits are not automatically recovered after a crash. Save files explicitly.
+- Collections save locally about every 750 ms while changed and on normal close.
+  The data file is `$XDG_DATA_HOME/rusty-boss/library.json` (normally
+  `~/.local/share/rusty-boss/library.json`). A previous copy is retained beside it.
+  Save errors stay visible; never discard work after a save error without exporting it.
+- **Export TSL…** shares the current collection as a Gen 3 `.tsl` file.
+  It does **not** write to the amplifier. Importing a TSL adds a new collection.
+- **Drag a tone onto an Amp channel** to save it on the amplifier. For several
+  tones, use **Library → Select & transfer tones**; destinations are listed before
+  you confirm. Earlier successful saves are not undone if a later save fails.
+- The local library is currently bounded to 16 MiB, with up to 100 collections
+  and 1,000 tones per collection. Export/remove unused collections if it fills up.
+  A crash before the next autosave can still lose the most recent edits.
 
-Find compatible downloads on [BOSS Tone Exchange](https://bosstoneexchange.com/gear/katana_gen_3).
-Use your browser to download them, then import them into Rusty Boss.
+### The advanced controls, without an advanced app
+
+- **Settings → Amp settings:** read the amp, choose Global EQ, Outputs, USB,
+  MIDI or Foot control, then **Apply to amp…**. Changes are staged locally until
+  Apply; stale externally changed settings are rejected before writes begin.
+- **Editor → ASSIGN:** select panel knobs, the amp pedal/footswitch, GA-FC/EX
+  or an expanded controller. Targets follow the active algorithm; expression
+  heel/toe ranges use its units and can be reversed. Changing a target resets its range.
+- Delay, Delay 2 and supported solo-delay pages have **Tap tempo**.
+  Reverb/Delay 2 pages expose their shared layer mode.
+- **Icon…** on an effect page lets you choose a local PNG, up to 512 × 512 pixels
+  and 2 MiB, for that algorithm. It changes the cards/chain, not your tone or amp.
+
+Marketplace integration, legacy-preset conversion, localization and bundled
+manuals are intentionally not part of Rusty Boss.
 
 ## Four looks, one app
 
@@ -115,7 +147,7 @@ Choose a theme in **Settings → Appearance**. Your choice is remembered.
 
 ## Run on Linux
 
-From a source checkout, with Rust, a C toolchain and ALSA development packages installed:
+From a source checkout, with Rust 1.89+, a C toolchain and ALSA development packages installed:
 
 ```sh
 cargo build --release --locked

@@ -1,5 +1,20 @@
 # Panel positions, effect levels and editor refinement
 
+## Current macro support
+
+The snapshot-only implementation described below has been extended. Dedicated
+PANEL macro controls now send only valid TEMP macro values in live preview mode,
+then read PATCH back to reconcile firmware-coordinated changes. Watcher DT1s are
+retained during reads/acks and update the live panel display; this is not a polling
+physical-position meter. The narrow write gate still rejects generic TEMP writes,
+out-of-range/sentinel writes, and every macro write in read-only mode. Effect
+Level and PANEL position remain different fields with no guessed scaling.
+
+The new paths were tested only on memory transports, never the connected amp.
+Hardware/reboot persistence remains unverified. See [PARITY.md](PARITY.md).
+
+## Historical snapshot-only milestone
+
 ## Questions and status
 
 | Question | Result |
@@ -133,12 +148,12 @@ These are distinct concepts. **PANEL mode** is the amplifier's slot 0; the
 **PANEL** numbers on effect cards are last-read macro positions. The latter do
 not constitute a complete PANEL editor.
 
-Current Rusty Boss can read slot 0 via Settings, or read the current sound after
-the user selects PANEL on the amp. Copying the current sound then allowing
-Preview & edit links ordinary patch parameters, including effect algorithms, to
-the current edit buffer. But the channel rail starts at 1, saves explicitly
-require `slot > 0`, and TEMP macro writes/continuous physical-knob monitoring
-are not implemented. There is no persistent PANEL-save workflow.
+Rusty Boss now includes PANEL (slot 0) in the channel rail for selection/read
+and confirmed drag-to-save. Persistent permission is required before the worker
+previews the captured tone and sends the same acknowledged write/export sequence
+with destination 0. Mock tests cover the packets and permission/confirmation flow.
+TEMP macro writes and continuous physical-knob monitoring remain unimplemented.
+No hardware writes were used to validate this workflow.
 
 The earlier decision to reject PANEL saves is a Rusty Boss restriction, **not a
 claim that the hardware cannot write PANEL**. The user reports that saving a
@@ -152,6 +167,36 @@ supplied original builds `PATCH_WRITE` with `00 + hex2(value)`, then calls
 exclusion. See the selected-source REA parent
 `ev_3e5b7eb3f9ee5796e95271624a33e562daa3f3afdbb406d744d9f2f62de76ea7`
 and [PRESET-WORKFLOW.md](PRESET-WORKFLOW.md). This corroborates a write route; it
-does not prove which fields firmware restores after reboot. No new amplifier
-traffic or writes were performed for this clarification, and slot-0 safety
-checks have not been removed.
+does not prove which fields firmware restores after reboot. The destination-0
+restriction has now been removed; the persistent permission gate, model/slot
+bounds, full-patch preflight and overwrite confirmation remain in place.
+
+## Knob, routing and PANEL workflow follow-up
+
+Selected-source REA parent:
+`ev_98473656e6d5eb7e0d98bb735aab859ba83f0ec78bb35d55ea44f70e3a9475fd`.
+The same HTML tree identity above was retained. Three sources were parsed inertly:
+`chain_controller.js`, `patch_controller.js`, and `model_info.js`; 146 other
+inventoried sources and dynamic relationships remain outside this analysis.
+Direct source inspection additionally checked `ChainEffector.js`, `ChainFV.js`
+and `model_controller.js`; none was executed.
+
+- `chain_controller.js:67–93` resolves a moved block back to base-pattern,
+  pedal/SR and EQ-position parameters. `ChainEffector.js:73–80` inserts the
+  block **after** the destination. Rusty Boss accepts only exact supported
+  single-block moves; it never guesses an arbitrary firmware chain layout.
+- `chain_controller.js:478–488` fixes AMP, DELAY 2 and REVERB in place;
+  `ChainFV.js:6` also disables volume movement. IN/OUT remain fixed.
+- `model_info.js:29–30, 62–67` includes PANEL in existing patches;
+  `model_controller.js:201–208` shows existing patches in the WRITE selector.
+  Combined with the write handler above, this supports destination 0 in the
+  app workflow, without proving device persistence or audible behavior.
+- Offline input tests cover immediate post-click arrows on dial/numeric controls,
+  repeated steps, range limits, disabled input and blur without phantom sends.
+  An additional headless diagram drag checks local routing and queued edits.
+  Mock tests cover confirmed PANEL saves and the destination-0 write/export frames.
+
+No amplifier connection, requests or writes were used during this follow-up.
+TEMP macro editing, continuous physical-knob telemetry and hardware/reboot
+verification remain out of scope. A saved PANEL tone includes all writable
+patch fields; it is not an effects-only merge with the previous PANEL settings.

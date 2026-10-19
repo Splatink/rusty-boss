@@ -55,7 +55,17 @@ impl WriteGate {
                     && data.len() == 2
                     && data[0] == 0
                     && data[1] < 9;
-                ensure!(active_patch || select || access==Access::Persistent,
+                let macro_knob = ((Address::packed(0x30000200)?.linear()
+                    ..=Address::packed(0x30000204)?.linear())
+                    .contains(&address.linear())
+                    || address == Address::packed(0x30000400)?)
+                    && data.len() == 1
+                    && (1..=101).contains(&data[0]);
+                let tap = (Address::packed(0x7f010106)?.linear()
+                    ..=Address::packed(0x7f010108)?.linear())
+                    .contains(&address.linear())
+                    && data == [0];
+                ensure!(active_patch || select || macro_knob || tap || access==Access::Persistent,
                     "Preset protection: stored channels, system settings and export commands require persistent-write permission");
                 Ok(())
             }
@@ -85,6 +95,9 @@ impl<T: Transport> Transport for ReadRequestsOnly<T> {
     }
     fn receive(&mut self, timeout: Duration) -> Result<Option<Vec<u8>>> {
         self.inner.receive(timeout)
+    }
+    fn wait(&mut self, duration: Duration) -> Result<()> {
+        self.inner.wait(duration)
     }
 }
 
@@ -127,6 +140,9 @@ impl<T: Transport> Transport for Guarded<T> {
     }
     fn receive(&mut self, timeout: Duration) -> Result<Option<Vec<u8>>> {
         self.inner.receive(timeout)
+    }
+    fn wait(&mut self, duration: Duration) -> Result<()> {
+        self.inner.wait(duration)
     }
 }
 #[cfg(test)]
@@ -216,6 +232,29 @@ mod tests {
         assert!(g.check(&dt(0x7f000104, vec![0, 1])).is_ok());
         g.set(Access::ReadOnly);
         assert!(g.check(&dt(0x20000600, vec![50])).is_err());
+    }
+    #[test]
+    fn preview_permission_allows_only_bounded_macros_and_tap_presses() {
+        let g = WriteGate::default();
+        g.set(Access::EditBuffer);
+        for addr in [0x30000200, 0x30000204, 0x30000400] {
+            for value in [1, 53, 101] {
+                assert!(g.check(&dt(addr, vec![value])).is_ok());
+            }
+            for data in [vec![0], vec![102], vec![127], vec![50, 50]] {
+                assert!(g.check(&dt(addr, data)).is_err());
+            }
+        }
+        for addr in [0x7f010106, 0x7f010107, 0x7f010108] {
+            assert!(g.check(&dt(addr, vec![0])).is_ok());
+            assert!(g.check(&dt(addr, vec![1])).is_err());
+        }
+        for addr in [0x30000205, 0x30000300, 0x30000401, 0x7f010109] {
+            assert!(g.check(&dt(addr, vec![1])).is_err());
+        }
+        g.set(Access::ReadOnly);
+        assert!(g.check(&dt(0x30000204, vec![53])).is_err());
+        assert!(g.check(&dt(0x7f010106, vec![0])).is_err());
     }
     #[test]
     fn permission_revocation_still_allows_our_own_unmute_cleanup() {

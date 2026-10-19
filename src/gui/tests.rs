@@ -1,4 +1,6 @@
 //! Offline UI/state tests. These never open a MIDI port or run a vendor app.
+#[path = "tests/advanced.rs"]
+mod advanced;
 use super::*;
 
 fn render(app: &mut App, ctx: &egui::Context, width: f32, height: f32) -> egui::FullOutput {
@@ -137,12 +139,11 @@ fn importing_is_local_and_failed_import_preserves_work() {
     app.file = file.to_string_lossy().into_owned();
     app.dirty = true;
     app.import_file();
-    assert_eq!(app.confirm.as_deref(), Some("import-path"));
-    assert_eq!(app.library.name, "My tones");
-    app.confirm = None;
-    app.confirm_action("import-path");
+    assert!(app.confirm.is_none());
+    assert_eq!(app.library.sets.len(), 2);
+    assert_eq!(app.library.sets[0].name, "My tones");
     assert_eq!(app.library.name, "Downloaded");
-    assert!(!app.busy && !app.live && !app.dirty);
+    assert!(!app.busy && !app.live && app.dirty);
     app.dirty = true;
     app.file = "/no/such/file.tsl".into();
     app.confirm_action("import-path");
@@ -237,7 +238,7 @@ fn drop_requires_permission_and_yes_saves_captured_tone_and_destination() {
         assert!(app.pending_save.is_none() && app.confirm.is_none());
     }
     app.confirm_action("unlock"); // Simple affirmative action; no magic phrase.
-    for slot in [0, 3, 9] {
+    for slot in [3, 9] {
         app.request_save(patch.clone(), slot);
         assert!(app.pending_save.is_none());
     }
@@ -258,6 +259,28 @@ fn drop_requires_permission_and_yes_saves_captured_tone_and_destination() {
     assert_eq!(app.channel_names[1].as_deref(), Some("Dragged tone"));
     assert!(!app.live); // Don't link controls for a different selected tone.
     assert!(jobs.try_recv().is_err());
+}
+#[cfg(feature = "midi")]
+#[test]
+fn panel_save_requires_permission_and_confirmation() {
+    let ctx = egui::Context::default();
+    let mut app = App::new(&ctx);
+    let jobs = fake_connected(&mut app);
+    for access in [Access::ReadOnly, Access::EditBuffer] {
+        app.set_access(access);
+        app.request_save(named(&app, "Panel effects"), 0);
+        assert!(app.pending_save.is_none());
+        assert!(jobs.try_recv().is_err());
+    }
+    app.set_access(Access::Persistent);
+    app.request_save(named(&app, "Panel effects"), 0);
+    assert_eq!(app.confirm.as_deref(), Some("save-channel"));
+    assert!(jobs.try_recv().is_err());
+    app.confirm = None;
+    app.confirm_action("save-channel");
+    assert!(
+        matches!(jobs.try_recv().unwrap(), Job::Save(r) if r.slot == 0 && r.patch.name() == "Panel effects")
+    );
 }
 #[cfg(feature = "midi")]
 #[test]

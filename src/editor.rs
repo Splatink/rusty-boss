@@ -118,11 +118,17 @@ pub struct ChainTable {
     pub flows: Vec<Vec<String>>,
 }
 #[derive(Clone, Debug, Deserialize)]
+pub struct Assignment {
+    pub knob_offset: usize,
+    pub targets: Vec<Control>,
+}
+#[derive(Clone, Debug, Deserialize)]
 pub struct Catalog {
     pub controls: BTreeMap<String, Control>,
     pub groups: BTreeMap<String, Vec<String>>,
     pub selectors: BTreeMap<String, Selector>,
     pub chains: Vec<ChainTable>,
+    pub assignments: BTreeMap<String, Assignment>,
     pub sources: BTreeMap<String, String>,
 }
 impl Catalog {
@@ -144,6 +150,101 @@ impl Catalog {
     }
     pub fn control(&self, id: &str) -> Option<Control> {
         self.controls.get(id).cloned()
+    }
+    pub fn assignment_key(&self, section: Section, s: &Schema, set: &ParamSet) -> Option<String> {
+        match section {
+            Section::Booster => Some("booster".into()),
+            Section::Delay | Section::Delay2 => Some("delay".into()),
+            Section::Reverb => Some("reverb".into()),
+            Section::Mod | Section::Fx => {
+                let color = *set.get("PATCH%COLOR")?.get(section.color_index()?)?;
+                let bank = color as usize + if section == Section::Mod { 1 } else { 4 };
+                let c = self
+                    .control("modfx-mod-type-select-box")?
+                    .remap("FX(1)", &format!("FX({bank})"));
+                Some(
+                    self.page("modfx-mod-type-select-box", c.value(s, set).ok()?)?
+                        .strip_prefix("modfx-")?
+                        .strip_suffix("-page")?
+                        .into(),
+                )
+            }
+            _ => None,
+        }
+    }
+    pub fn knob_assignment(&self, key: &str, label: &str) -> Option<Control> {
+        let assignment = self.assignments.get(key)?;
+        let mut c = self.control(&format!("asgn-pedal-{key}-select-box"))?;
+        c.block = "PATCH%ASSIGN_KNOBS".into();
+        c.offset = assignment.knob_offset;
+        c.id = format!("knob-{key}");
+        c.label = label.into();
+        Some(c)
+    }
+    pub fn pedal_assignment(
+        &self,
+        s: &Schema,
+        set: &ParamSet,
+        pedal: &str,
+        expanded: bool,
+    ) -> Result<Vec<Control>> {
+        ensure!(
+            ["pedal", "exp1", "exp2", "exp3"].contains(&pedal),
+            "unknown expression input"
+        );
+        ensure!(
+            !expanded || pedal != "pedal",
+            "amp pedal cannot be expanded"
+        );
+        let remap = |c: Control| if expanded { c.remap("(1)", "(2)") } else { c };
+        let mut function = remap(
+            self.control(&format!("asgn-{pedal}-function-select-box"))
+                .context("missing expression function")?,
+        );
+        function.label = "Function".into();
+        let value = function.value(s, set)?;
+        let section = match value {
+            4 => Section::Booster,
+            5 => Section::Mod,
+            6 => Section::Fx,
+            7 | 8 => Section::Delay,
+            9 => Section::Reverb,
+            _ => return Ok(vec![function]),
+        };
+        let key = self
+            .assignment_key(section, s, set)
+            .context("unknown assigned algorithm")?;
+        let mut target = remap(
+            self.control(&format!("asgn-{pedal}-{key}-select-box"))
+                .context("missing target")?,
+        );
+        target.label = "Target".into();
+        let choice = usize::try_from(target.value(s, set)?)?;
+        let template = self
+            .assignments
+            .get(&key)
+            .and_then(|a| a.targets.get(choice))
+            .context("invalid expression target")?;
+        let (min, max) = if template.block.is_empty() {
+            (0, 100)
+        } else {
+            template.range(s)?
+        };
+        let mut result = vec![function, target];
+        for (suffix, label) in [("min", "Heel"), ("max", "Toe")] {
+            let mut c = remap(
+                self.control(&format!("asgn-{pedal}-{key}-{suffix}-spinner"))
+                    .context("missing expression range")?,
+            );
+            c.label = label.into();
+            c.min = Some(min);
+            c.max = Some(max);
+            c.bias = template.bias;
+            c.display = template.display.clone();
+            c.choices = template.choices.clone();
+            result.push(c);
+        }
+        Ok(result)
     }
     pub fn chain(
         &self,
@@ -183,9 +284,43 @@ impl Catalog {
         chain.push("speaker".into());
         Ok(chain)
     }
+    /// Resolve a single-block move to firmware-supported routing parameters.
+    pub fn move_in_chain(&self, current: &[String], source: &str, after: &str) -> Result<[i32; 5]> {
+        ensure!(
+            source != after && !["in", "speaker", "amp", "fv", "dly2", "rev"].contains(&source),
+            "fixed block"
+        );
+        ensure!(after != "speaker", "cannot move after output");
+        let mut moved = current.to_vec();
+        let from = moved
+            .iter()
+            .position(|s| s == source)
+            .context("unknown source")?;
+        moved.remove(from);
+        let to = moved
+            .iter()
+            .position(|s| s == after)
+            .context("unknown destination")?;
+        moved.insert(to + 1, source.into());
+        ensure!(moved != current, "unchanged routing");
+        for pattern in 0..9 {
+            for pedal in 0..2 {
+                for sr in 0..3 {
+                    for eq1 in 0..2 {
+                        for eq2 in 0..2 {
+                            if self.chain(pattern, pedal, sr, eq1, eq2)? == moved {
+                                return Ok([pattern, pedal, sr, eq1, eq2]);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        anyhow::bail!("unsupported routing")
+    }
     /// Last-read panel macro position, NOT an algorithm's effect level. The
     /// shipped watcher uses a +1 wire bias; zero on the wire means unavailable.
-    /// Kept read-only: editing a TEMP knob has coordinated firmware side effects.
+    /// TEMP macro writes are dedicated session commands, never raw schema edits.
     pub fn panel_position(&self, s: &Schema, set: &ParamSet, section: Section) -> Option<i32> {
         let offset = match section {
             Section::Booster => 0,
@@ -193,9 +328,16 @@ impl Catalog {
             Section::Fx => 2,
             Section::Delay => 3,
             Section::Reverb => 4,
+            Section::Solo => 0,
             _ => return None,
         };
-        let b = s.block("PATCH%PATCH_KNOB_READONLY").ok()?;
+        let b = s
+            .block(if section == Section::Solo {
+                "PATCH%PATCH_KNOB_SOLO_DELAY_READONLY"
+            } else {
+                "PATCH%PATCH_KNOB_READONLY"
+            })
+            .ok()?;
         let p = b.parameters.iter().find(|p| p.offset == offset)?;
         let value = p.decode_number(set.get(&b.id)?).ok()?;
         (0..=100).contains(&value).then_some(value)
@@ -356,6 +498,9 @@ pub fn gafc(model: u8) -> bool {
     model != 5
 }
 #[cfg(test)]
+#[path = "editor/assignment_tests.rs"]
+mod assignment_tests;
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::document::Patch;
@@ -363,7 +508,8 @@ mod tests {
     fn all_metadata_bindings_resolve() {
         let s = Schema::load();
         let u = Catalog::load();
-        assert_eq!(u.controls.len(), 951);
+        assert_eq!(u.controls.len(), 1243);
+        assert_eq!(u.assignments.len(), 34);
         for c in u.controls.values() {
             c.parameter(&s).unwrap();
         }
@@ -421,6 +567,46 @@ mod tests {
                 }
             }
         }
+    }
+    #[test]
+    fn chain_moves_only_resolve_exact_supported_routes() {
+        let u = Catalog::load();
+        let mut legal_moves = 0;
+        for pattern in 0..9 {
+            for pedal in 0..2 {
+                for sr in 0..3 {
+                    for eq1 in 0..2 {
+                        for eq2 in 0..2 {
+                            let chain = u.chain(pattern, pedal, sr, eq1, eq2).unwrap();
+                            for source in &chain {
+                                for after in &chain {
+                                    if let Ok([p, pd, s, e1, e2]) =
+                                        u.move_in_chain(&chain, source, after)
+                                    {
+                                        let mut expected = chain.clone();
+                                        expected.remove(
+                                            expected.iter().position(|id| id == source).unwrap(),
+                                        );
+                                        let to =
+                                            expected.iter().position(|id| id == after).unwrap();
+                                        expected.insert(to + 1, source.clone());
+                                        assert_eq!(u.chain(p, pd, s, e1, e2).unwrap(), expected);
+                                        legal_moves += 1;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        assert!(legal_moves > 216);
+        let chain = u.chain(0, 0, 0, 0, 0).unwrap();
+        for source in ["in", "amp", "speaker", "fv", "rev", "dly2", "missing"] {
+            assert!(u.move_in_chain(&chain, source, "bst").is_err());
+        }
+        assert!(u.move_in_chain(&chain, "bst", "speaker").is_err());
+        assert!(u.move_in_chain(&chain, "bst", "bst").is_err());
     }
     #[test]
     fn viewing_algorithm_or_bank_does_not_reset_hidden_parameters() {

@@ -3,6 +3,7 @@ pub mod document;
 pub mod editor;
 #[cfg(feature = "gui")]
 pub mod gui;
+pub mod library;
 #[cfg(feature = "midi")]
 pub mod midi;
 pub mod protocol;

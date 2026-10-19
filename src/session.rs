@@ -6,13 +6,17 @@ use crate::{
 };
 use anyhow::{bail, ensure, Context, Result};
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, VecDeque},
     time::{Duration, Instant},
 };
 
 pub trait Transport {
     fn send(&mut self, bytes: &[u8]) -> Result<()>;
     fn receive(&mut self, timeout: Duration) -> Result<Option<Vec<u8>>>;
+    fn wait(&mut self, duration: Duration) -> Result<()> {
+        std::thread::sleep(duration);
+        Ok(())
+    }
 }
 /// Tracks every requested byte, not just the first matching DT1. Unrelated,
 /// duplicate, reordered and partial device replies cannot cause false completion.
@@ -54,6 +58,7 @@ pub struct Session<T: Transport> {
     pub identity: Identity,
     timeout: Duration,
     active: bool,
+    updates: VecDeque<Message>,
 }
 impl<T: Transport> Session<T> {
     /// Strict observation: identity and RQ1 only, no editor-mode setup or cleanup.
@@ -80,6 +85,7 @@ impl<T: Transport> Session<T> {
             identity,
             timeout: Duration::from_secs(15),
             active: false,
+            updates: VecDeque::new(),
         })
     }
     pub fn connect(transport: T) -> Result<Self> {
@@ -116,16 +122,25 @@ impl<T: Transport> Session<T> {
         let deadline = Instant::now() + self.timeout;
         while Instant::now() < deadline {
             if let Some(frame) = self.transport.receive(Duration::from_millis(10))? {
-                if let Ok(Message::Data {
-                    device,
-                    address,
-                    data,
-                }) = Message::decode(&frame)
-                {
-                    if (device == self.identity.device || device == 0x7f)
-                        && read.accept(address, &data)?
+                if let Ok(m @ Message::Data { .. }) = Message::decode(&frame) {
+                    if let Message::Data {
+                        device,
+                        address: a,
+                        ref data,
+                    } = m
                     {
-                        return Ok(read.bytes);
+                        if device != self.identity.device && device != 127 {
+                            continue;
+                        }
+                        let overlaps = a.linear() < address.linear() + size as u32
+                            && a.linear() as u64 + data.len() as u64 > address.linear() as u64;
+                        if overlaps {
+                            if read.accept(a, data)? {
+                                return Ok(read.bytes);
+                            }
+                        } else {
+                            self.retain_update(m)?;
+                        }
                     }
                 }
             }
@@ -231,25 +246,169 @@ impl<T: Transport> Session<T> {
     }
     /// Explicit preview only; never writes a stored slot implicitly.
     pub fn preview(&mut self, schema: &Schema, patch: &Patch) -> Result<()> {
-        // Validate the entire operation before emitting any write.
+        for (addr, data) in Self::patch_tasks(schema, patch, Address::packed(0x20000000)?, false)? {
+            self.dt1(addr, data)?;
+        }
+        Ok(())
+    }
+    fn patch_tasks(
+        schema: &Schema,
+        patch: &Patch,
+        base: Address,
+        stored: bool,
+    ) -> Result<Vec<(Address, Vec<u8>)>> {
         let mut tasks = Vec::new();
+        let root = Address::packed(0x20000000)?.linear();
         for b in schema
             .blocks
             .iter()
-            .filter(|b| b.id.starts_with("PATCH%") && !b.readonly)
+            .filter(|b| b.id.starts_with("PATCH%") && (stored || !b.readonly))
         {
             let data = patch
                 .parameters
                 .get(&b.id)
                 .with_context(|| format!("missing block {}", b.id))?;
             ensure!(data.len() >= b.size, "short patch block {}", b.id);
-            for p in &b.parameters {
-                if p.encoding == "ascii" {
-                    p.encode_text(std::str::from_utf8(&data[p.offset..p.offset + p.width])?)?;
-                } else {
-                    p.encode_number(p.decode_number(data)?)?;
+            b.validate_data(&data[..b.size])?;
+            for (offset, size) in b.chunks() {
+                tasks.push((
+                    base.plus((b.address - root) as usize + offset)?,
+                    data[offset..offset + size].to_vec(),
+                ));
+            }
+        }
+        Ok(tasks)
+    }
+    /// Dedicated firmware macro commands; TEMP stays read-only to generic callers.
+    pub fn panel_macro(&mut self, schema: &Schema, index: usize, value: i32) -> Result<()> {
+        ensure!(
+            index < 6 && (0..=100).contains(&value),
+            "invalid panel macro"
+        );
+        ensure!(
+            index != 5 || [9, 11].contains(&self.identity.model_code),
+            "solo delay unavailable"
+        );
+        let (id, offset) = if index == 5 {
+            ("TEMP%TEMP_KNOB_SOLO_DELAY", 0)
+        } else {
+            ("TEMP%TEMP_KNOB", index)
+        };
+        let b = schema.block(id)?;
+        let p = &b.parameters[offset];
+        self.dt1(b.address().plus(p.offset)?, p.encode_number(value)?)
+    }
+    pub fn tap(&mut self, delay: usize) -> Result<()> {
+        ensure!(delay < 3, "unknown delay");
+        ensure!(
+            delay != 2 || [9, 11].contains(&self.identity.model_code),
+            "solo delay unavailable"
+        );
+        self.dt1(Address::packed(0x7f010106 + delay as u32)?, vec![0])
+    }
+    /// Stage locally, then apply only changed settings. Detect external changes before writing.
+    pub fn apply_system(
+        &mut self,
+        schema: &Schema,
+        before: &ParamSet,
+        after: &ParamSet,
+    ) -> Result<ParamSet> {
+        let mut edits = Vec::new();
+        for b in schema.blocks.iter().filter(|b| b.id.starts_with("SYSTEM%")) {
+            let old = before.get(&b.id).context("system settings not read")?;
+            let new = after.get(&b.id).context("incomplete system settings")?;
+            b.validate_data(old)?;
+            b.validate_data(new)?;
+            for (index, p) in b.parameters.iter().enumerate() {
+                let range = p.offset..p.offset + p.width;
+                if old[range.clone()] != new[range.clone()] {
+                    ensure!(
+                        b.id != "SYSTEM%POWERADJUST" || [9, 11].contains(&self.identity.model_code),
+                        "power control unavailable"
+                    );
+                    ensure!(
+                        b.id != "SYSTEM%GAFC" || self.identity.model_code != 5,
+                        "GA-FC unavailable"
+                    );
+                    edits.push((
+                        b.id.clone(),
+                        index,
+                        old[range.clone()].to_vec(),
+                        new[range].to_vec(),
+                    ));
                 }
             }
+        }
+        for (id, index, old, _) in &edits {
+            let b = schema.block(id)?;
+            ensure!(
+                self.read(b.address().plus(b.parameters[*index].offset)?, old.len())? == *old,
+                "Amp settings changed since reading; reload settings before applying"
+            );
+        }
+        for (id, index, _, bytes) in edits {
+            self.set_parameter(schema, &id, index, bytes)?;
+        }
+        self.read_root(schema, "SYSTEM")
+    }
+    pub fn store_patches(
+        &mut self,
+        schema: &Schema,
+        patches: &[(usize, Patch)],
+        mut progress: impl FnMut(usize, usize),
+    ) -> Result<()> {
+        ensure!(
+            !patches.is_empty() && patches.len() <= 9,
+            "select 1–9 tones"
+        );
+        let mut slots = std::collections::BTreeSet::new();
+        for (slot, patch) in patches {
+            ensure!(
+                self.identity.slot_exists(*slot) && slots.insert(*slot),
+                "invalid or duplicate destination"
+            );
+            Self::patch_tasks(schema, patch, Address::packed(0x20000000)?, false)?;
+        }
+        for (i, (slot, patch)) in patches.iter().enumerate() {
+            self.store_patch(schema, patch, *slot).with_context(|| {
+                format!(
+                    "Save to {} stopped; earlier channels may have changed",
+                    crate::schema::slot_label(*slot)
+                )
+            })?;
+            progress(i + 1, patches.len());
+        }
+        Ok(())
+    }
+    /// Vendor restore staging, 10-second settling interval, then one all-data export.
+    /// No retries: cancellation or failure can leave a partially restored amplifier.
+    pub fn restore_backup(
+        &mut self,
+        schema: &Schema,
+        backup: &Backup,
+        mut progress: impl FnMut(usize, usize),
+    ) -> Result<()> {
+        ensure!(
+            backup.device == DEVICE
+                && backup.revision == "0000"
+                && backup.model == self.identity.name,
+            "backup must match this exact amp model and revision"
+        );
+        ensure!(
+            backup.patches.len() >= 9 && backup.patches.len() <= 10,
+            "incomplete backup rows"
+        );
+        ensure!(
+            backup.patches.get(9).is_none_or(Option::is_none),
+            "unsupported staging row in backup"
+        );
+        let mut tasks = Vec::new();
+        for b in schema.blocks.iter().filter(|b| b.id.starts_with("SYSTEM%")) {
+            let data = backup
+                .system
+                .get(&b.id)
+                .context("incomplete system backup")?;
+            b.validate_data(data)?;
             for (offset, size) in b.chunks() {
                 tasks.push((
                     b.address().plus(offset)?,
@@ -257,9 +416,54 @@ impl<T: Transport> Session<T> {
                 ));
             }
         }
-        for (addr, data) in tasks {
-            self.dt1(addr, data)?;
+        for slot in 0..9 {
+            if self.identity.slot_exists(slot) {
+                let data = &backup.patches[slot]
+                    .as_ref()
+                    .context("missing channel in backup")?
+                    .0;
+                let patch = Patch {
+                    parameters: data.clone(),
+                    ..Patch::new(schema)?
+                };
+                tasks.extend(Self::patch_tasks(
+                    schema,
+                    &patch,
+                    slot_address(slot)?,
+                    true,
+                )?);
+            } else {
+                ensure!(
+                    backup.patches[slot].is_none(),
+                    "backup contains an unavailable channel"
+                );
+            }
         }
+        let setup = schema.block("SETUP%COM")?;
+        let current = backup
+            .setup
+            .get(&setup.id)
+            .context("missing backup channel selection")?;
+        setup.validate_data(current)?;
+        let selected = setup.parameters[0].decode_number(current)?;
+        ensure!(
+            selected >= 0 && self.identity.slot_exists(selected as usize),
+            "invalid backup channel selection"
+        );
+        let total = tasks.len() + 1;
+        for (i, (addr, data)) in tasks.into_iter().enumerate() {
+            self.dt1(addr, data)?;
+            progress(i + 1, total);
+        }
+        self.transport.wait(Duration::from_secs(10))?;
+        self.dt1(Address::packed(0x7f010109)?, vec![1])?;
+        let result = self.command_ack(Address::packed(0x7f01010a)?, vec![127, 127]);
+        if result.is_err() {
+            let _ = self.dt1(Address::packed(0x7f010109)?, vec![0]);
+        }
+        result?;
+        self.select_slot(selected as usize)?;
+        progress(total, total);
         Ok(())
     }
     /// Save the supplied snapshot, never an unrelated or stale hardware buffer.
@@ -267,8 +471,8 @@ impl<T: Transport> Session<T> {
     /// Failure/cancellation does not roll back the amp and must not be retried automatically.
     pub fn store_patch(&mut self, schema: &Schema, patch: &Patch, slot: usize) -> Result<()> {
         ensure!(
-            slot > 0 && self.identity.slot_exists(slot),
-            "cannot overwrite PANEL or absent slot"
+            self.identity.slot_exists(slot),
+            "cannot overwrite absent slot"
         );
         self.preview(schema, patch)?;
         self.commit(slot)
@@ -290,12 +494,18 @@ impl<T: Transport> Session<T> {
         let deadline = Instant::now() + self.timeout;
         while Instant::now() < deadline {
             if let Some(f) = self.transport.receive(Duration::from_millis(10))? {
-                if let Ok(Message::Data {
-                    device, address: a, ..
-                }) = Message::decode(&f)
-                {
-                    if (device == self.identity.device || device == 127) && address == a {
-                        return Ok(());
+                if let Ok(m @ Message::Data { .. }) = Message::decode(&f) {
+                    if let Message::Data {
+                        device, address: a, ..
+                    } = m
+                    {
+                        if device != self.identity.device && device != 127 {
+                            continue;
+                        }
+                        if address == a {
+                            return Ok(());
+                        }
+                        self.retain_update(m)?;
                     }
                 }
             }
@@ -306,8 +516,8 @@ impl<T: Transport> Session<T> {
     /// local changes first and explicitly confirm the destructive destination.
     pub fn commit(&mut self, slot: usize) -> Result<()> {
         ensure!(
-            slot > 0 && self.identity.slot_exists(slot),
-            "cannot overwrite PANEL or absent slot"
+            self.identity.slot_exists(slot),
+            "cannot overwrite absent slot"
         );
         self.command_ack(Address::packed(0x7f000104)?, vec![0, slot as u8])?;
         self.dt1(Address::packed(0x7f010109)?, vec![1])?;
@@ -319,7 +529,21 @@ impl<T: Transport> Session<T> {
         }
         result
     }
+    fn retain_update(&mut self, m: Message) -> Result<()> {
+        ensure!(
+            self.updates.len() < 1024,
+            "Device update backlog full; reconnect to resynchronize"
+        );
+        self.updates.push_back(m);
+        Ok(())
+    }
+    pub fn take_updates(&mut self) -> Vec<Message> {
+        self.updates.drain(..).collect()
+    }
     pub fn poll(&mut self) -> Result<Option<Message>> {
+        if let Some(m) = self.updates.pop_front() {
+            return Ok(Some(m));
+        }
         if let Some(frame) = self.transport.receive(Duration::from_millis(1))? {
             if let Ok(m @ Message::Data { device, .. }) = Message::decode(&frame) {
                 if device == self.identity.device || device == 127 {
@@ -342,6 +566,9 @@ impl<T: Transport> Drop for Session<T> {
         let _ = self.close();
     }
 }
+#[cfg(test)]
+#[path = "session/operations_tests.rs"]
+mod operations_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -368,6 +595,9 @@ mod tests {
         fn receive(&mut self, _: Duration) -> Result<Option<Vec<u8>>> {
             Ok(self.incoming.pop_front())
         }
+        fn wait(&mut self, _: Duration) -> Result<()> {
+            Ok(())
+        }
     }
     fn offline_session(incoming: VecDeque<Vec<u8>>) -> Session<Mock> {
         Session {
@@ -382,6 +612,7 @@ mod tests {
             },
             timeout: Duration::from_millis(5),
             active: false,
+            updates: VecDeque::new(),
         }
     }
     #[test]
@@ -432,7 +663,7 @@ mod tests {
         assert!(s
             .set_parameter(&schema, "COMMAND%COMMAND_COM", 0, vec![1])
             .is_err());
-        assert!(s.commit(0).is_err());
+        assert!(s.commit(10).is_err());
         assert!(s.commit(9).is_err());
         assert!(s.transport.sent.is_empty());
     }
@@ -502,6 +733,7 @@ mod tests {
             },
             timeout: Duration::from_millis(5),
             active: false,
+            updates: VecDeque::new(),
         };
         assert!(s
             .store_patch(&schema, &Patch::new(&schema).unwrap(), 1)
@@ -514,7 +746,7 @@ mod tests {
         let schema = Schema::load();
         let mut p = Patch::new(&schema).unwrap();
         let mut s = offline_session(VecDeque::new());
-        for slot in [0, 9] {
+        for slot in [9, 10] {
             assert!(s.store_patch(&schema, &p, slot).is_err());
         }
         s.identity.model_code = 5; // KATANA-50 has no A3.
@@ -558,6 +790,52 @@ mod tests {
         );
     }
     #[test]
+    fn panel_store_uses_snapshot_then_acknowledged_panel_write() {
+        let schema = Schema::load();
+        let patch = Patch::new(&schema).unwrap();
+        let ack = |packed| {
+            Message::Data {
+                device: 16,
+                address: Address::packed(packed).unwrap(),
+                data: vec![0],
+            }
+            .encode()
+            .unwrap()
+        };
+        let mut s = offline_session(VecDeque::from([ack(0x7f000104), ack(0x7f01010a)]));
+        s.store_patch(&schema, &patch, 0).unwrap();
+        let mut preview = offline_session(VecDeque::new());
+        preview.preview(&schema, &patch).unwrap();
+        assert_eq!(
+            &s.transport.sent[..preview.transport.sent.len()],
+            &preview.transport.sent
+        );
+        let commands: Vec<_> = s.transport.sent[preview.transport.sent.len()..]
+            .iter()
+            .map(|f| Message::decode(f).unwrap())
+            .collect();
+        assert_eq!(
+            commands,
+            vec![
+                Message::Data {
+                    device: 16,
+                    address: Address::packed(0x7f000104).unwrap(),
+                    data: vec![0, 0]
+                },
+                Message::Data {
+                    device: 16,
+                    address: Address::packed(0x7f010109).unwrap(),
+                    data: vec![1]
+                },
+                Message::Data {
+                    device: 16,
+                    address: Address::packed(0x7f01010a).unwrap(),
+                    data: vec![0x40, 0]
+                },
+            ]
+        );
+    }
+    #[test]
     fn missing_save_ack_never_retries_commit() {
         let schema = Schema::load();
         let p = Patch::new(&schema).unwrap();
@@ -588,6 +866,6 @@ mod tests {
         assert_eq!(s.transport.sent[0], IDENTITY_REQUEST);
         s.close().unwrap();
         assert_eq!(s.transport.sent.len(), 4);
-        assert!(s.commit(0).is_err());
+        assert!(s.commit(10).is_err());
     }
 }

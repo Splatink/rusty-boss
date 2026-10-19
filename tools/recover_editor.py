@@ -19,10 +19,10 @@ def recover(root):
     for key, item in items.items():
         pid = item.get('pid', '')
         n = layout.ids.get(key)
-        if not n or not pid.startswith(('PATCH%', 'SYSTEM%')):
+        if not n or not pid.startswith(('PATCH%', 'SYSTEM%', 'TEMP%TEMP_KNOB')):
             continue
         classes = n.attrs.get('class', '')
-        if 'item-hidden' in classes or not any('elf-'+s+'-control' in classes for s in ['dial','knob','slider','select-box','check-box','radio-button','toggle-button']):
+        if 'item-hidden' in classes or not any('elf-'+s+'-control' in classes for s in ['dial','knob','slider','spinner','select-box','check-box','radio-button','toggle-button']):
             continue
         block, offset = pid.rsplit('%', 1)
         if '=' in offset or not offset.isdigit():
@@ -64,6 +64,32 @@ def recover(root):
         # A shared stringer may contain more entries than this widget permits
         # (notably solo-delay-high-cut). Respect the shipped widget bounds.
         c['choices'] = [o for o in choices if (c['min'] is None or o['value'] >= c['min']) and (c['max'] is None or o['value'] <= c['max'])]
+    # Dynamic assignment menus come from literal target tables, not layout placeholders.
+    assign_source = re.sub(r'//[^\n]*', '', (root/'js/businesslogic/ktn/assign_setting.js').read_text())
+    assignments = {}
+    for m in re.finditer(r'(\w+):\s*\{\s*param:\s*\[(.*?)^\s*\](.*?)(?=^\t\t\w+:|\Z)', assign_source, re.S | re.M):
+        key, params, tail = m.groups()
+        targets = []
+        for obj in re.findall(r'\{([^{}]*)\}', params):
+            ref = re.search(r"\bid:\s*'([^']+)'", obj)
+            if ref:
+                assert ref[1] in controls, ref[1]
+                target = controls[ref[1]].copy()
+            else:
+                name = re.search(r"\bname:\s*'([^']+)'", obj)
+                assert name, obj
+                target = dict(id='preset', block='', offset=0, label=name[1], choices=[], display='raw',
+                              min=int(re.search(r'\bmin:\s*(-?\d+)', obj)[1]),
+                              max=int(re.search(r'\bmax:\s*(-?\d+)', obj)[1]), bias=0)
+            targets.append(target)
+        ofs = re.search(r'ofs_knobs_detail:\s*(\d+)', tail)
+        offset = int(ofs[1]) if ofs else {'booster':0, 'delay':1, 'reverb':2}[key]
+        assignments[key] = dict(knob_offset=offset, targets=targets)
+        for prefix in ['knobs', 'pedal', 'exp1', 'exp2', 'exp3']:
+            c = controls.get(f'asgn-{prefix}-{key}-select-box')
+            if c:
+                c['choices'] = [dict(value=i, label=t['label']) for i,t in enumerate(targets)]
+    assert len(assignments) == 34 and all(a['targets'] for a in assignments.values())
     groups = {}
     for key,n in layout.ids.items():
         ids = [c.attrs.get('id') for c in n.all() if c.attrs.get('id') in controls]
@@ -81,15 +107,18 @@ def recover(root):
         assert len(flows) == 9 and all(len(f)==10 for f in flows)
         chains.append(dict(pedal=int(m[1]),send_return=int(m[2]),flows=flows))
     assert len(chains)==6
-    return dict(controls=controls,groups=groups,selectors=selectors,chains=chains,
-                sources={p:hashlib.sha256((root/p).read_bytes()).hexdigest() for p in ['export/item.json','export/layout.div','js/item/item_logic.js','js/businesslogic/chain/chain_config.js','js/businesslogic/bts/effect_controller.js','js/businesslogic/ktn/model_info.js']})
+    return dict(controls=controls,groups=groups,selectors=selectors,chains=chains,assignments=assignments,
+                sources={p:hashlib.sha256((root/p).read_bytes()).hexdigest() for p in ['export/item.json','export/layout.div','js/item/item_logic.js','js/businesslogic/chain/chain_config.js','js/businesslogic/bts/effect_controller.js','js/businesslogic/ktn/model_info.js','js/businesslogic/ktn/assign_setting.js']})
 
 if __name__ == '__main__':
     result = recover(Path(sys.argv[1]))
     out = Path(__file__).resolve().parents[1]/'data/editor-ui.json'
     # Only retain groups actually used by the Rust presentation, plus selector pages.
     wanted = {'booster-content-page','editor-ns-page','editor-sr-page','editor-solo-page','editor-contour-page',
-              'asgn-knobs-pedal-page','asgn-gafc-page','editor-effects-page'}
+              'asgn-knobs-pedal-page','asgn-gafc-page','editor-effects-page',
+              'system-line-out-setting-page','system-power-amp-in-setting-page',
+              'system-usb-setting-page','system-midi-setting-page','system-gafc-page',
+              'system-powercontrol-page','global-eq-content-main-page'}
     wanted.update(page for s in result['selectors'].values() for page in s['pages'])
     wanted.update(['pedalfx-position-select-box','eq-position-select-box','eq2-position-select-box'])
     result['groups'] = {k:v for k,v in result['groups'].items() if k in wanted}

@@ -3,13 +3,29 @@ use crate::protocol::Message;
 use crate::{
     document::{Backup, LiveSet, ParamSet, Patch},
     editor::{Catalog, Edit, Section},
+    library::Library,
     protocol::Identity,
     safety::{Access, WriteGate},
     schema::{slot_label, Schema},
 };
 use eframe::egui::{self, Color32, RichText};
-use std::{collections::VecDeque, path::PathBuf};
+use std::{
+    collections::{BTreeMap, BTreeSet, VecDeque},
+    path::PathBuf,
+};
 mod classic;
+mod collections;
+mod icons;
+mod settings;
+use settings::SystemDraft;
+#[derive(Clone)]
+enum FileAction {
+    Import,
+    Export,
+    BackupOpen,
+    BackupSave,
+    Icon(String),
+}
 #[cfg(test)]
 mod tests;
 mod theme;
@@ -41,6 +57,22 @@ struct SaveRequest {
 struct PatchDrag(Patch);
 
 #[cfg(feature = "midi")]
+fn overlay_pending_edits(schema: &Schema, values: &mut ParamSet, edits: &VecDeque<Edit>) {
+    for edit in edits {
+        if let (Ok(block), Some(data)) = (schema.block(&edit.block), values.get_mut(&edit.block)) {
+            if let Some(parameter) = block.parameters.get(edit.index) {
+                if data.len() >= parameter.offset + parameter.width
+                    && edit.bytes.len() == parameter.width
+                {
+                    data[parameter.offset..parameter.offset + parameter.width]
+                        .copy_from_slice(&edit.bytes);
+                }
+            }
+        }
+    }
+}
+
+#[cfg(feature = "midi")]
 enum Job {
     Connect(String),
     Disconnect,
@@ -51,7 +83,14 @@ enum Job {
     Preview(PreviewRequest),
     Save(SaveRequest),
     Backup,
-    Set(String, usize, Vec<u8>),
+    ReadSystem,
+    ApplySystem(Box<SystemDraft>),
+    Macro(u64, usize, i32),
+    Tap(usize),
+    ReadSlots(Vec<usize>),
+    SaveMany(Vec<(usize, Patch)>),
+    Restore(Box<Backup>),
+    Set(u64, String, usize, Vec<u8>),
     Shutdown,
 }
 #[cfg(feature = "midi")]
@@ -64,6 +103,12 @@ enum Event {
     Previewed(u64, ParamSet),
     Saved(SaveRequest),
     Backup(Box<Backup>),
+    System(ParamSet),
+    Refreshed(u64, ParamSet),
+    Slots(Vec<(usize, Patch)>),
+    SavedMany(Vec<(usize, Patch)>),
+    Restored,
+    Progress(usize, usize),
     Done(String),
     Update(Message),
     Error(String),
@@ -167,15 +212,89 @@ impl Worker {
                                     Event::Saved(r)
                                 }
                                 Job::Backup => Event::Backup(Box::new(s.read_backup(&schema)?)),
-                                Job::Set(id, i, b) => {
+                                Job::ReadSystem => Event::System(s.read_root(&schema, "SYSTEM")?),
+                                Job::ApplySystem(draft) => {
+                                    anyhow::ensure!(
+                                        gate.access() == Access::Persistent,
+                                        "Amp writes are locked"
+                                    );
+                                    Event::System(s.apply_system(
+                                        &schema,
+                                        &draft.before,
+                                        &draft.values,
+                                    )?)
+                                }
+                                Job::Macro(generation, index, value) => {
+                                    s.panel_macro(&schema, index, value)?;
+                                    Event::Refreshed(generation, s.read_root(&schema, "PATCH")?)
+                                }
+                                Job::Tap(index) => {
+                                    s.tap(index)?;
+                                    Event::Done("Tap sent · Saved channels unchanged".into())
+                                }
+                                Job::ReadSlots(slots) => {
+                                    anyhow::ensure!(
+                                        !slots.is_empty()
+                                            && slots.len() <= 9
+                                            && slots
+                                                .iter()
+                                                .all(|slot| s.identity.slot_exists(*slot)),
+                                        "Invalid channel selection"
+                                    );
+                                    let mut patches = Vec::new();
+                                    for (i, slot) in slots.iter().enumerate() {
+                                        patches.push((*slot, s.read_slot(&schema, *slot)?));
+                                        let _ = events.send(Event::Progress(i + 1, slots.len()));
+                                    }
+                                    Event::Slots(patches)
+                                }
+                                Job::SaveMany(patches) => {
+                                    anyhow::ensure!(
+                                        gate.access() == Access::Persistent,
+                                        "Amp writes are locked"
+                                    );
+                                    s.store_patches(&schema, &patches, |i, n| {
+                                        let _ = events.send(Event::Progress(i, n));
+                                    })?;
+                                    Event::SavedMany(patches)
+                                }
+                                Job::Restore(backup) => {
+                                    anyhow::ensure!(
+                                        gate.access() == Access::Persistent,
+                                        "Amp writes are locked"
+                                    );
+                                    s.restore_backup(&schema, &backup, |i, n| {
+                                        let _ = events.send(Event::Progress(i, n));
+                                    })?;
+                                    Event::Restored
+                                }
+                                Job::Set(generation, id, i, b) => {
                                     s.set_parameter(&schema, &id, i, b)?;
-                                    Event::Done("Sound updated · saved channels unchanged".into())
+                                    let coordinated = id == "PATCH%COLOR"
+                                        || id.starts_with("PATCH%ASSIGN")
+                                        || (i == 0
+                                            && ["PATCH%FX(", "PATCH%BOOSTER(", "PATCH%DELAY("]
+                                                .iter()
+                                                .any(|prefix| id.starts_with(prefix)))
+                                        || (i <= 1 && id.starts_with("PATCH%REVERB("));
+                                    if coordinated {
+                                        Event::Refreshed(generation, s.read_root(&schema, "PATCH")?)
+                                    } else {
+                                        Event::Done(
+                                            "Sound updated · saved channels unchanged".into(),
+                                        )
+                                    }
                                 }
                                 _ => unreachable!(),
                             })
                         }
                     }
                 })();
+                if let Some(s) = session.as_mut() {
+                    for m in s.take_updates() {
+                        let _ = events.send(Event::Update(m));
+                    }
+                }
                 let event = match result {
                     Ok(e) => e,
                     Err(e) => {
@@ -221,7 +340,8 @@ struct App {
     section: Section,
     offline_model: u8,
     theme: Theme,
-    file_dialog: Option<(bool, std::sync::mpsc::Receiver<Option<PathBuf>>)>,
+    file_dialog: Option<(FileAction, std::sync::mpsc::Receiver<Option<PathBuf>>)>,
+    icons: BTreeMap<String, Option<egui::TextureHandle>>,
     write_gate: WriteGate,
     write_busy: bool,
     pending_edits: VecDeque<Edit>,
@@ -230,7 +350,17 @@ struct App {
     pending_preview: Option<PreviewRequest>,
     pending_save: Option<SaveRequest>,
     channel_names: [Option<String>; 9],
-    library: LiveSet,
+    library: Library,
+    library_path: Option<PathBuf>,
+    library_error: Option<String>,
+    autosave_at: std::time::Instant,
+    tone_selection: BTreeSet<usize>,
+    amp_selection: BTreeSet<usize>,
+    target_set: usize,
+    pending_bulk: Vec<(usize, Patch)>,
+    system: Option<SystemDraft>,
+    system_page: usize,
+    assign_controller: usize,
     selected: usize,
     page: Page,
     file: String,
@@ -263,8 +393,7 @@ impl App {
         theme.apply(ctx);
         let schema = Schema::load();
         let write_gate = WriteGate::default();
-        let mut library = LiveSet::new("My tones");
-        library.data[0].push(Patch::new(&schema).unwrap());
+        let (library, library_path, library_error) = Self::load_library(&schema);
         Self {
             #[cfg(feature = "midi")]
             worker: Worker::new(schema.clone(), write_gate.clone()),
@@ -278,6 +407,7 @@ impl App {
             offline_model: 5,
             theme,
             file_dialog: None,
+            icons: BTreeMap::new(),
             write_gate,
             write_busy: false,
             pending_edits: VecDeque::new(),
@@ -287,6 +417,16 @@ impl App {
             pending_save: None,
             channel_names: Default::default(),
             library,
+            library_path,
+            library_error,
+            autosave_at: std::time::Instant::now(),
+            tone_selection: BTreeSet::new(),
+            amp_selection: BTreeSet::new(),
+            target_set: 0,
+            pending_bulk: Vec::new(),
+            system: None,
+            system_page: 0,
+            assign_controller: 0,
             selected: 0,
             page: Page::Editor,
             file: "my-tones.tsl".into(),
@@ -306,17 +446,36 @@ impl App {
         }
     }
     fn pick_file(&mut self, saving: bool) {
+        self.choose_file(if saving {
+            FileAction::Export
+        } else {
+            FileAction::Import
+        });
+    }
+    fn choose_file(&mut self, action: FileAction) {
         if self.file_dialog.is_some() || self.busy {
             return;
         }
         let (tx, rx) = std::sync::mpsc::channel();
-        let current = PathBuf::from(&self.file);
+        let current = PathBuf::from(
+            if matches!(action, FileAction::BackupOpen | FileAction::BackupSave) {
+                &self.backup_file
+            } else {
+                &self.file
+            },
+        );
+        let selected_action = action.clone();
         std::thread::spawn(move || {
-            let mut dialog = rfd::FileDialog::new().add_filter("Katana tones", &["tsl"]);
+            let (label, extension) = match &selected_action {
+                FileAction::BackupOpen | FileAction::BackupSave => ("Katana backup", "alb"),
+                FileAction::Icon(_) => ("Effect icon (PNG)", "png"),
+                _ => ("Katana tones", "tsl"),
+            };
+            let mut dialog = rfd::FileDialog::new().add_filter(label, &[extension]);
             if let Some(parent) = current.parent().filter(|p| p.is_dir()) {
                 dialog = dialog.set_directory(parent);
             }
-            let path = if saving {
+            let path = if matches!(selected_action, FileAction::Export | FileAction::BackupSave) {
                 dialog
                     .set_file_name(
                         current
@@ -330,25 +489,39 @@ impl App {
             };
             let _ = tx.send(path);
         });
-        self.file_dialog = Some((saving, rx));
+        self.file_dialog = Some((action, rx));
     }
     fn poll_file_dialog(&mut self) {
         if self.busy {
             return;
         }
-        let Some((saving, rx)) = &self.file_dialog else {
+        let Some((action, rx)) = &self.file_dialog else {
             return;
         };
         match rx.try_recv() {
             Ok(path) => {
-                let saving = *saving;
+                let action = action.clone();
                 self.file_dialog = None;
                 if let Some(path) = path {
-                    self.file = path.to_string_lossy().into_owned();
-                    if saving {
-                        self.confirm_action("save-path");
-                    } else {
-                        self.import_file();
+                    match action {
+                        FileAction::Import | FileAction::Export => {
+                            self.file = path.to_string_lossy().into_owned();
+                            if matches!(action, FileAction::Export) {
+                                self.confirm_action("save-path");
+                            } else {
+                                self.import_file();
+                            }
+                        }
+                        FileAction::BackupOpen => self.open_backup(&path),
+                        FileAction::BackupSave => {
+                            self.backup_file = path.to_string_lossy().into_owned();
+                            self.confirm = Some("save-backup".into());
+                        }
+                        FileAction::Icon(key) => {
+                            if let Err(e) = self.import_icon(&key, &path) {
+                                self.log(format!("Icon not changed: {e:#}"));
+                            }
+                        }
                     }
                 }
             }
@@ -360,11 +533,7 @@ impl App {
         }
     }
     fn import_file(&mut self) {
-        if self.dirty {
-            self.confirm = Some("import-path".into());
-        } else {
-            self.confirm_action("import-path");
-        }
+        self.confirm_action("import-path");
     }
     fn log(&mut self, s: impl Into<String>) {
         let s = s.into();
@@ -393,7 +562,7 @@ impl App {
         if self.busy {
             return;
         }
-        self.write_busy = matches!(job, Job::Set(..));
+        self.write_busy = matches!(job, Job::Set(..) | Job::Tap(..));
         self.previewing = matches!(job, Job::Preview(_));
         if !self.write_busy {
             self.pending_edits.clear();
@@ -442,6 +611,10 @@ impl App {
         }
     }
     fn choose_channel(&mut self, slot: usize) {
+        if self.library.data[0].len() >= 1000 {
+            self.log("This collection is full; choose another collection first");
+            return;
+        }
         if self.busy
             || !self
                 .connected
@@ -463,7 +636,6 @@ impl App {
         !self.busy
             && self.confirm.is_none()
             && self.write_gate.access() == Access::Persistent
-            && slot > 0
             && self
                 .connected
                 .as_ref()
@@ -485,19 +657,66 @@ impl App {
         }
         if !self.busy {
             if let Some(e) = self.pending_edits.pop_front() {
-                self.submit(Job::Set(e.block, e.index, e.bytes));
+                self.submit(Job::Set(self.generation, e.block, e.index, e.bytes));
             }
         }
     }
     #[cfg(feature = "midi")]
     fn handle_event(&mut self, e: Event) {
-        if !matches!(&e, Event::Update(_)) {
+        if !matches!(&e, Event::Update(_) | Event::Progress(..)) {
             self.busy = false;
             self.write_busy = false;
             self.previewing = false;
         }
         match e {
+            Event::Progress(i, n) => {
+                self.status =
+                    format!("Working… {i}/{n} · Cancellation can leave partial hardware changes")
+            }
+            Event::System(values) => {
+                self.system = Some(SystemDraft {
+                    before: values.clone(),
+                    values,
+                });
+                self.log("Amp settings read · Changes are staged until you apply them");
+            }
+            Event::Refreshed(generation, mut values) => {
+                if generation == self.generation && self.write_gate.access() != Access::ReadOnly {
+                    overlay_pending_edits(&self.schema, &mut values, &self.pending_edits);
+                    if let Some(patch) = self.library.data[0].get_mut(self.selected) {
+                        patch.parameters.extend(values);
+                    }
+                    self.dirty = true;
+                    self.synced = true;
+                    self.live = true;
+                    self.log("Sound synchronized with amp · Saved channels unchanged");
+                }
+            }
+            Event::Slots(patches) => {
+                for (slot, patch) in patches {
+                    self.channel_names[slot] = Some(patch.name());
+                    self.library.data[0].push(patch);
+                }
+                self.dirty = true;
+                self.disarm();
+                self.log("Selected amp channels copied to this set");
+            }
+            Event::SavedMany(patches) => {
+                for (slot, patch) in patches {
+                    self.channel_names[slot] = Some(patch.name());
+                }
+                self.disarm();
+                self.log("Selected tones saved · Click a tone to preview");
+            }
+            Event::Restored => {
+                self.system = None;
+                self.disarm();
+                self.set_access(Access::ReadOnly);
+                self.log("Restore completed · Amp writes locked again");
+                self.submit(Job::ChannelNames);
+            }
             Event::Connected(id) => {
+                self.system = None;
                 self.log(format!(
                     "Connected to {} · Choose a tone to preview",
                     id.name
@@ -508,6 +727,7 @@ impl App {
                 self.submit(Job::ChannelNames);
             }
             Event::Disconnected => {
+                self.system = None;
                 self.connected = None;
                 self.disarm();
                 self.pending_save = None;
@@ -516,6 +736,13 @@ impl App {
                 self.log("Disconnected · Read-only protection restored");
             }
             Event::Current(p) => {
+                if self.library.data[0].len() >= 1000 {
+                    self.disarm();
+                    self.log(
+                        "Collection full; choose another collection before copying the amp sound",
+                    );
+                    return;
+                }
                 // Hardware reads are copies, never destructive replacement of a downloaded tone.
                 self.library.data[0].push(p);
                 self.selected = self.library.data[0].len() - 1;
@@ -527,9 +754,14 @@ impl App {
             }
             Event::ChannelNames(names) => {
                 self.channel_names = names;
-                self.log("Ready · Click a tone to preview, or enable channel writes and drag it to a channel");
+                self.log("Ready · Click a tone to preview, or enable amp writes and drag it to a channel");
             }
             Event::Slot(slot, p) => {
+                if self.library.data[0].len() >= 1000 {
+                    self.disarm();
+                    self.log("Collection full; choose another collection before copying a channel");
+                    return;
+                }
                 self.channel_names[slot] = Some(p.name());
                 self.library.data[0].push(p);
                 self.selected = self.library.data[0].len() - 1;
@@ -547,6 +779,7 @@ impl App {
                 {
                     if let Some(p) = self.library.data[0].get_mut(self.selected) {
                         p.parameters.extend(readback);
+                        self.dirty = true;
                     }
                     self.synced = true;
                     self.live = true;
@@ -589,6 +822,7 @@ impl App {
             }
             Event::Done(s) => self.log(s),
             Event::Error(s) => {
+                self.system = None;
                 self.connected = None;
                 self.disarm();
                 self.pending_save = None;
@@ -603,24 +837,34 @@ impl App {
                     return;
                 }
                 if self.synced {
-                    for b in self
-                        .schema
-                        .blocks
-                        .iter()
-                        .filter(|b| b.id.starts_with("PATCH%"))
-                    {
-                        let first = address.linear() as i64 - b.address as i64;
-                        if first >= 0 && first as usize + data.len() <= b.size {
-                            if let Some(dst) = self.library.data[0]
-                                .get_mut(self.selected)
-                                .and_then(|p| p.parameters.get_mut(&b.id))
-                            {
-                                dst[first as usize..first as usize + data.len()]
-                                    .copy_from_slice(&data);
-                                self.dirty = true;
+                    if let Some(patch) = self.library.data[0].get_mut(self.selected) {
+                        let address = address.linear() as usize;
+                        for block in self
+                            .schema
+                            .blocks
+                            .iter()
+                            .filter(|b| b.id.starts_with("PATCH%"))
+                        {
+                            let base = block.address as usize;
+                            let start = address.max(base);
+                            let end = (address + data.len()).min(base + block.size);
+                            if start < end {
+                                if let Some(dst) = patch
+                                    .parameters
+                                    .get_mut(&block.id)
+                                    .filter(|d| d.len() >= end - base)
+                                {
+                                    dst[start - base..end - base]
+                                        .copy_from_slice(&data[start - address..end - address]);
+                                    self.dirty = true;
+                                }
                             }
-                            break;
                         }
+                        overlay_pending_edits(
+                            &self.schema,
+                            &mut patch.parameters,
+                            &self.pending_edits,
+                        );
                     }
                 }
             }
@@ -644,8 +888,8 @@ impl App {
                 self.set_access(Access::EditBuffer);
             }
             if access == Access::Persistent {
-                if ui.button("Channel writes enabled · Lock").clicked() { self.set_access(Access::EditBuffer); }
-            } else if ui.button("Enable channel writes…").clicked() { self.confirm = Some("unlock".into()); }
+                if ui.button("Amp writes enabled · Lock").clicked() { self.set_access(Access::EditBuffer); }
+            } else if ui.button("Enable amp writes…").clicked() { self.confirm = Some("unlock".into()); }
         });
     }
     fn header(&mut self, ctx: &egui::Context) {
@@ -668,7 +912,7 @@ impl App {
                         );
                         if self.dirty {
                             ui.label(
-                                RichText::new("● Unsaved file")
+                                RichText::new("● Saving locally…")
                                     .color(self.theme.accent())
                                     .size(11.),
                             );
@@ -739,9 +983,9 @@ impl App {
         ui.small(if self.write_gate.access() == Access::Persistent {
             "Drag a tone here to save it."
         } else {
-            "Saved channels locked. Enable channel writes to save a tone."
+            "Saved channels locked. Enable amp writes to save a tone."
         });
-        for slot in 1..9 {
+        for slot in 0..9 {
             if !self
                 .connected
                 .as_ref()
@@ -783,7 +1027,7 @@ impl App {
             } else if can_save {
                 "Drop a library tone to save. Click to hear this channel (discards unsaved amp-buffer edits)."
             } else {
-                "Click to hear this channel (discards unsaved amp-buffer edits). Enable channel writes to save by dropping."
+                "Click to hear this channel (discards unsaved amp-buffer edits). Enable amp writes to save by dropping."
             });
         }
     }
@@ -800,7 +1044,7 @@ impl App {
                         .strong()
                         .color(self.theme.accent()),
                 );
-                ui.small(&self.library.name);
+                self.collection_picker(ui);
                 ui.small("Click to preview · Drag to save");
                 // Keep the destination cards reachable even with a large imported liveset.
                 let height = (ui.available_height() * 0.34).clamp(100., 240.);
@@ -812,7 +1056,7 @@ impl App {
                     if ui.button("Import TSL…").clicked() {
                         self.pick_file(false);
                     }
-                    if ui.button("Save file…").clicked() {
+                    if ui.button("Export TSL…").clicked() {
                         self.pick_file(true);
                     }
                 });
@@ -824,7 +1068,10 @@ impl App {
     }
     fn library_page(&mut self, ui: &mut egui::Ui) {
         ui.heading("Your tone library");
-        ui.label("Choose a tone on the left to edit or preview it. Drag it onto an amp channel to save it there.");
+        self.collection_tools(ui);
+        ui.label(
+            "Choose a tone to edit or preview. Collections save locally; TSL export shares a set.",
+        );
         ui.horizontal(|ui| {
             ui.label("Liveset name:");
             if ui.text_edit_singleline(&mut self.library.name).changed() {
@@ -832,7 +1079,13 @@ impl App {
             }
         });
         ui.horizontal_wrapped(|ui| {
-            if ui.button("New tone").clicked() {
+            if ui
+                .add_enabled(
+                    self.library.data[0].len() < 1000,
+                    egui::Button::new("New tone"),
+                )
+                .clicked()
+            {
                 self.library.data[0].push(Patch::new(&self.schema).unwrap());
                 self.selected = self.library.data[0].len() - 1;
                 self.dirty = true;
@@ -840,13 +1093,14 @@ impl App {
             }
             if ui
                 .add_enabled(
-                    !self.library.data[0].is_empty(),
+                    !self.library.data[0].is_empty() && self.library.data[0].len() < 1000,
                     egui::Button::new("Duplicate"),
                 )
                 .clicked()
             {
                 let p = self.library.data[0][self.selected].clone();
                 self.library.data[0].insert(self.selected + 1, p);
+                self.tone_selection.clear();
                 self.selected += 1;
                 self.dirty = true;
                 self.disarm();
@@ -864,6 +1118,7 @@ impl App {
                 .add_enabled(self.selected > 0, egui::Button::new("Move up"))
                 .clicked()
             {
+                self.tone_selection.clear();
                 self.library.data[0].swap(self.selected, self.selected - 1);
                 self.selected -= 1;
                 self.dirty = true;
@@ -875,6 +1130,7 @@ impl App {
                 )
                 .clicked()
             {
+                self.tone_selection.clear();
                 self.library.data[0].swap(self.selected, self.selected + 1);
                 self.selected += 1;
                 self.dirty = true;
@@ -911,12 +1167,9 @@ impl App {
             }
         }
         ui.separator();
-        ui.label("Save file saves a TSL on your computer. Dropping onto a channel saves to your amplifier.");
-        ui.hyperlink_to(
-            "Find Gen 3 tones on BOSS Tone Exchange",
-            "https://bosstoneexchange.com/gear/katana_gen_3",
-        );
-        ui.small("You can also drop a .tsl file onto this window to import it. Import replaces the local liveset; save your work first.");
+        ui.label("Export TSL shares this collection as a file. Dropping onto a channel saves to your amplifier.");
+        ui.small("Drop a Gen 3 TSL onto this window to add a collection. Existing tones are kept.");
+        self.bulk_library(ui);
     }
     fn connection(&mut self, ui: &mut egui::Ui) {
         ui.heading("Amplifier");
@@ -969,6 +1222,8 @@ impl App {
         ui.label("This build is offline-only (no MIDI support).");
         ui.small("Read-only protects tones and settings, including temporary sound changes. The editor connection still sends session setup/cleanup commands. Nothing connects automatically.");
         ui.separator();
+        self.settings_page(ui);
+        ui.separator();
         ui.heading("Appearance");
         ui.horizontal_wrapped(|ui| {
             for theme in Theme::ALL {
@@ -1010,7 +1265,7 @@ impl App {
         });
         egui::CollapsingHeader::new("Help & connection log").show(ui, |ui| {
             ui.label("Rusty Boss · A BOSS KATANA editor for Linux. Currently supports Gen 3.");
-            ui.label("Experimental hardware support: keep a known-good backup before saving channels. MkI/MkII conversion and bulk restore are not available.");
+            ui.label("Experimental hardware support: keep a known-good backup before saving channels, applying settings or restoring a backup.");
             ui.label("Independent software. Not affiliated with Roland/BOSS.");
             egui::CollapsingHeader::new("Typeface license").show(ui, |ui| {
                 egui::ScrollArea::vertical().id_salt("font-license").max_height(180.).show(ui, |ui| {
@@ -1065,13 +1320,7 @@ impl App {
                 .add_enabled(!self.busy, egui::Button::new("Open ALB"))
                 .clicked()
             {
-                match Backup::load(&PathBuf::from(&self.backup_file)) {
-                    Ok(b) => {
-                        self.backup = Some(b);
-                        self.log("Backup opened");
-                    }
-                    Err(e) => self.log(e.to_string()),
-                }
+                self.choose_file(FileAction::BackupOpen);
             }
             if ui
                 .add_enabled(
@@ -1080,7 +1329,21 @@ impl App {
                 )
                 .clicked()
             {
-                self.confirm = Some("save-backup".into());
+                self.choose_file(FileAction::BackupSave);
+            }
+            let matching = self
+                .backup
+                .as_ref()
+                .zip(self.connected.as_ref())
+                .is_some_and(|(b, id)| b.model == id.name);
+            if ui
+                .add_enabled(
+                    matching && !self.busy && self.write_gate.access() == Access::Persistent,
+                    egui::Button::new("Restore full backup…"),
+                )
+                .clicked()
+            {
+                self.confirm = Some("restore".into());
             }
         });
         let mut extract = None;
@@ -1115,7 +1378,7 @@ impl App {
                 Err(e) => self.log(e.to_string()),
             }
         }
-        ui.small("Bulk restore is not available. You can recover individual tones and drag them to channels.");
+        ui.small("Full restore requires a backup from this exact model and enabled amp writes. It replaces system settings, PANEL and all saved channels. Keep a separate known-good backup.");
     }
     fn confirmation(&mut self, ctx: &egui::Context) {
         let Some(action) = self.confirm.clone() else {
@@ -1128,20 +1391,35 @@ impl App {
             if action == "import-path" || action == "save-path" {
                 ui.heading(if action == "import-path" { "Import TSL" } else { "Save TSL file" });
                 ui.label("File path:"); ui.text_edit_singleline(&mut self.file);
-                ui.small(if action == "import-path" { "Replaces the local liveset. Save any unsaved work first. The amp is not changed until you click a tone in preview mode." } else { "Saves all local tones, including edits. An existing file at this path will be replaced." });
+                ui.small(if action == "import-path" { "Adds a collection without replacing existing tones. The amp is unchanged." } else { "Exports this collection. An existing file at this path will be replaced." });
             } else {
                 ui.heading("Confirm");
                 let message = match action.as_str() {
-                    "unlock" => "Enable channel writes? You will be able to overwrite saved tones by dropping them onto a channel. Each overwrite still asks first. Keep a backup.",
+                    "unlock" => "Enable persistent amp writes? You can save tones, apply system settings and restore backups. Each operation still asks first. Keep a known-good backup.",
 
                     "delete" => "Delete this local tone? This cannot be undone.",
                     "save-backup" => "Save the backup ALB to the chosen path? An existing file will be replaced.",
+                    "apply-system" => "Apply the staged settings to your amp? These are persistent settings, not just a tone preview. Keep a backup.",
+                    "restore" => "Restore this backup's system settings, PANEL and all saved channels? This replaces the entire amp configuration. Use a separate known-good backup. Failure/cancellation can leave a partial restore; never retry blindly.",
+                    "delete-set" => "Delete this local collection and all its tones? Export a TSL first if you want to keep it.",
+                    "delete-selected" => "Delete the selected local tones? This cannot be undone.",
+                    "save-many" => "Overwrite the listed amp channels? This changes the current sound. Each completed save is permanent; cancellation does not roll back earlier channels.",
                     _ => "Continue?",
                 };
-                if action == "save-channel" {
+                if action == "save-many" {
+                    ui.label(message);
+                    for (slot, patch) in &self.pending_bulk { ui.label(format!("{} ← {}", slot_label(*slot), patch.name())); }
+                } else if action == "restore" {
+                    ui.label(message);
+                    if let Some(b) = &self.backup { ui.strong(format!("Backup: {} · Amp: {}", b.model, self.connected.as_ref().map(|id| id.name).unwrap_or("Disconnected"))); }
+                } else if action == "save-channel" {
                     if let Some(r) = &self.pending_save {
                         ui.label(format!("Save “{}” to {}?", r.patch.name(), slot_label(r.slot)));
-                        ui.label("This replaces the saved channel and changes the current amp sound. It cannot be undone without a backup.");
+                        ui.label(if r.slot == 0 {
+                            "This replaces the saved PANEL settings, including its effect choices, and changes the current amp sound. Physical knobs can override panel-controlled values. Keep a backup."
+                        } else {
+                            "This replaces the saved channel and changes the current amp sound. It cannot be undone without a backup."
+                        });
                     }
                 } else { ui.label(message); }
             }
@@ -1153,6 +1431,7 @@ impl App {
         if no || modal.should_close() {
             self.confirm = None;
             self.pending_save = None;
+            self.pending_bulk.clear();
             return;
         }
         if yes {
@@ -1164,28 +1443,38 @@ impl App {
         match action {
             "unlock" => {
                 self.set_access(Access::Persistent);
-                self.log("Channel writes enabled · Drag a tone onto a channel to save");
+                self.log("Amp writes enabled · Saving channels, applying settings and restoring still require confirmation");
             }
-            "import-path" => match LiveSet::load(&PathBuf::from(&self.file), &self.schema) {
-                Ok((library, warnings)) => {
-                    self.library = library;
-                    self.selected = 0;
-                    self.dirty = false;
-                    self.disarm();
-                    self.log(format!("TSL imported · {} tones · {} compatibility warnings · Click a tone to preview", self.library.data[0].len(), warnings.len()));
+            "import-path" => {
+                match LiveSet::load(&PathBuf::from(&self.file), &self.schema) {
+                    Ok((library, warnings)) => {
+                        match self.library.add(library) {
+                            Ok(()) => {
+                                self.selected = 0;
+                                self.tone_selection.clear();
+                                self.dirty = true;
+                                self.disarm();
+                                self.log(format!("TSL added as a collection · {} tones · {} compatibility warnings", self.library.data[0].len(), warnings.len()));
+                            }
+                            Err(e) => self.log(e.to_string()),
+                        }
+                    }
+                    Err(e) => self.log(format!("Import failed: {e:#}")),
                 }
-                Err(e) => self.log(format!("Import failed: {e:#}")),
-            },
-            "save-path" => match self.library.save(&PathBuf::from(&self.file)) {
-                Ok(()) => {
-                    self.dirty = false;
-                    self.log("TSL saved on your computer");
+            }
+            "save-path" => {
+                match self.library.sets[self.library.active].save(&PathBuf::from(&self.file)) {
+                    Ok(()) => {
+                        self.persist_library();
+                        self.log("TSL exported on your computer");
+                    }
+                    Err(e) => self.log(format!("Save failed: {e:#}")),
                 }
-                Err(e) => self.log(format!("Save failed: {e:#}")),
-            },
+            }
             "delete" => {
                 if !self.library.data[0].is_empty() {
                     self.library.data[0].remove(self.selected);
+                    self.tone_selection.clear();
                     self.selected = self
                         .selected
                         .min(self.library.data[0].len().saturating_sub(1));
@@ -1199,6 +1488,40 @@ impl App {
                         Ok(()) => self.log("Backup saved"),
                         Err(e) => self.log(e.to_string()),
                     }
+                }
+            }
+            "delete-set" => self.delete_collection(),
+            "delete-selected" => self.delete_selected(),
+            "apply-system" => {
+                if !self.busy
+                    && self.connected.is_some()
+                    && self.write_gate.access() == Access::Persistent
+                {
+                    #[cfg(feature = "midi")]
+                    if let Some(draft) = self.system.clone() {
+                        self.disarm();
+                        self.submit(Job::ApplySystem(Box::new(draft)));
+                    }
+                }
+            }
+            "restore" => {
+                if !self.busy
+                    && self.connected.is_some()
+                    && self.write_gate.access() == Access::Persistent
+                {
+                    #[cfg(feature = "midi")]
+                    if let Some(b) = self.backup.clone() {
+                        self.disarm();
+                        self.submit(Job::Restore(Box::new(b)));
+                    }
+                }
+            }
+            "save-many" => {
+                let patches = std::mem::take(&mut self.pending_bulk);
+                if !patches.is_empty() && patches.iter().all(|(slot, _)| self.can_save_to(*slot)) {
+                    self.disarm();
+                    #[cfg(feature = "midi")]
+                    self.submit(Job::SaveMany(patches));
                 }
             }
             "save-channel" => {
@@ -1253,6 +1576,12 @@ impl eframe::App for App {
             }
         }
         self.confirmation(ctx);
+        if self.dirty
+            && (self.autosave_at.elapsed().as_millis() >= 750
+                || ctx.input(|i| i.viewport().close_requested()))
+        {
+            self.persist_library();
+        }
         #[cfg(feature = "midi")]
         self.flush_edits();
         ctx.request_repaint_after(std::time::Duration::from_millis(if self.busy {
@@ -1280,8 +1609,8 @@ impl eframe::App for App {
         if self.close_dialog {
             egui::Modal::new(egui::Id::new("unsaved-close")).show(ctx, |ui| {
                 ui.heading("Unsaved tones");
-                ui.label("Save your TSL file before closing?");
-                if ui.button("Save file…").clicked() {
+                ui.label("Local autosave has not succeeded. Export the collections you need before closing.");
+                if ui.button("Export TSL…").clicked() {
                     self.close_dialog = false;
                     self.pick_file(true);
                 }

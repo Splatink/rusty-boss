@@ -106,6 +106,21 @@ impl Block {
         }
         Ok(data)
     }
+    pub fn validate_data(&self, data: &[u8]) -> Result<()> {
+        ensure!(
+            data.len() == self.size && data.iter().all(|b| *b < 128),
+            "invalid block {}",
+            self.id
+        );
+        for p in &self.parameters {
+            if p.encoding == "ascii" {
+                p.encode_text(std::str::from_utf8(&data[p.offset..p.offset + p.width])?)?;
+            } else if !self.readonly {
+                p.encode_number(p.decode_number(data)?)?;
+            }
+        }
+        Ok(())
+    }
     /// Do not split multi-byte values across request boundaries.
     pub fn chunks(&self) -> Vec<(usize, usize)> {
         let mut chunks = Vec::new();

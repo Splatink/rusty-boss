@@ -51,8 +51,8 @@ that our save uses the original librarian staging protocol byte-for-byte.
 The editor now has **Editor**, **Library** and **Settings**. Presets and
 model-filtered channel cards share the left rail; sound sections are buttons
 above the editor. Raw/Regular switches, the raw block sidebar and the System tab
-are removed. Backup/recovery and logs are collapsed in Settings. There is no
-system-parameter editor in this UI.
+are removed. Amp settings, backup/recovery and logs are collapsed in Settings.
+System editing is staged inside Settings rather than a raw/System top-level tab.
 
 ### Preview
 
@@ -71,11 +71,12 @@ system-parameter editor in this UI.
 
 ### Save
 
-- **Enable channel writes… → Yes/No** replaces the typed phrase. The per-packet
+- **Enable amp writes… → Yes/No** replaces the typed phrase. The per-packet
   transport gate still enforces permissions; hiding UI controls is not protection.
 - Dragging captures a **patch snapshot**, not a mutable list index or a reference
   to whatever happens to be in the hardware buffer. A channel drop captures its
-  destination too. PANEL/absent channels are rejected.
+  destination too. PANEL (slot 0) is supported; absent channels are rejected.
+  PANEL uses the same permission gate and confirmation as other destinations.
 - The overwrite modal names the tone and destination and offers **Yes / No**.
   No, Escape or dismissal sends no MIDI save job.
 - After Yes, the worker checks persistent permission before changing even the
@@ -97,16 +98,17 @@ model/firmware-specific validation.
 ### Files and appearance
 
 Native XDG-portal file choosers run off the UI thread. TSL file-drop import is also
-supported. Import asks before discarding unsaved local work; reads of the current
-amp sound create a new local tone instead of replacing an imported one. Save file
-is explicitly different from saving a channel.
+supported. Import adds/activates a new collection without discarding existing
+ones; reads of the current amp sound create a new local tone. Local collections
+autosave; explicit TSL export is still different from saving a channel.
 
 Puppet (default), Kill and Lightning are dark. Justice is pearl white with pale
 green fills and readable dark-green text accents. Lightning mixes metallic
 steel-blue surfaces with purple selection/interaction accents. Puppet carries
 warm copper/earth tones through surfaces, controls and interaction states instead
 of only changing the accent. The palette includes cards, controls, knobs, text,
-selection and effect-bank contrast, not just the accent color. Only appearance is persisted; permissions aren't.
+selection and effect-bank contrast, not just the accent color. Appearance, local
+collections and custom icons persist; hardware write permissions never do.
 
 ## Verification boundary
 

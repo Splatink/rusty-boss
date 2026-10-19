@@ -7,15 +7,15 @@ not execution/behavioral equivalence of the original application.
 | Check | Result |
 |---|---|
 | `cargo fmt --check` (after formatting) | Passed |
-| `cargo test --locked` | **66 passed**: 52 unit/UI + 14 integration tests |
-| `cargo test --locked --no-default-features` | **46 passed**: 32 unit + 14 integration tests |
-| `cargo test --locked --no-default-features --features gui` | **57 passed**: 43 unit/UI + 14 integration tests |
+| `cargo test --locked --offline` | **98 passed**: 84 unit/UI + 14 integration tests |
+| `cargo test --locked --offline --no-default-features` | **64 passed**: 50 unit + 14 integration tests |
+| `cargo test --locked --offline --no-default-features --features gui` | **83 passed**: 69 unit/UI + 14 integration tests |
 | `cargo clippy --all-targets -- -D warnings` | Passed |
 | `cargo clippy --no-default-features --features gui --all-targets -- -D warnings` | Passed |
 | `cargo build --locked` | Passed |
 | `cargo build --release --locked` | Passed; native executable about 18 MiB (with native portal file chooser) |
 | Debug GUI four-frame startup/exit smoke | Exit 0 |
-| Release GUI startup/exit smoke | Exit 0 for all four themes, isolated Xvfb, 50 frames each, no port enumeration/connection |
+| Release GUI startup/exit smoke | Exit 0 for all four themes, isolated Xvfb and temporary appearance config, no port enumeration/connection; Puppet screenshot retained |
 | CLI `new` + `inspect` constructed Gen 3 TSL | Passed |
 | CLI `request 20000000 16` | Correct expected RQ1 bytes; not transmitted |
 | CLI `ports` (initial milestone only) | No duplex raw MIDI ports then; not repeated with the user\'s now-connected amp |
@@ -36,13 +36,18 @@ smoke test on a display-enabled host, use
   conflicting duplicate bytes, incomplete-read failure without retries.
 - Identity model codes and channel-presence bounds; handshake/disable-mode behavior
   through a mock transport.
-- Preview preflight validates all fields before any write; direct command-area edits,
-  PANEL commits and nonexistent channel commits are rejected.
+- Preview preflight validates all fields before any write; direct command-area edits
+  and nonexistent channel commits are rejected. PANEL saves are covered by mock
+  snapshot/write/export and permission/confirmation tests.
+- Rotary dial and numeric arrow-key steps, focus retention, bounds and unchanged
+  focus-loss behavior have headless input tests. Chain moves resolve only to exact
+  supported routes; a headless diagram drag verifies routing and queued edits.
 - TSL and ALB constructed-file round trips, unknown-field preservation, hex bytes,
   null backup rows, reported default-tail fill, product/revision/size rejection.
 - Headless egui rendering of Editor/Library/Settings, empty libraries, all four
-  themes and auxiliary dialogs; startup is offline. Raw/system editing was removed
-  in the simplified UI. A real accessibility review is still required.
+  themes and auxiliary dialogs; startup is offline. Raw/System top-level tabs stay
+  removed; staged amp settings render inside Settings. A real accessibility review
+  is still required.
 - Actual egui pointer click and drag/drop events feed a fake MIDI job collector:
   click previews, drop captures a patch/destination snapshot, No/Escape sends
   nothing, Yes saves the captured snapshot without typed input.
@@ -71,7 +76,7 @@ smoke test on a display-enabled host, use
 - Standard editor renders every recovered MOD/FX/delay/reverb/booster/EQ/pedal
   algorithm across color banks without changing a single parameter byte or
   queuing a write. Hidden bank/algorithm parameters remain intact.
-- All 951 numeric bindings resolve, reachable finite UI options encode and
+- All 1,243 numeric bindings resolve, reachable finite UI options encode and
   round-trip without touching neighboring bytes; formatted numeric entry inverts
   the known unit rules.
 - Strict observation transport rejects all DT1 (including editor setup/cleanup),
@@ -91,6 +96,23 @@ smoke test on a display-enabled host, use
   rejected packets never reach transport; permission revocation still permits
   cleanup of a mute sent by that transport.
 - Pending edits coalesce by parameter; disarming drops the unsent queue.
+- All 34 dynamic assignment tables resolve and their target/range endpoints encode.
+  Expression bindings follow algorithm/color/controller/expansion, including signed
+  targets, millisecond targets and reversed ranges; detailed pages render inertly.
+- System Apply validates all changes before writing and checks old values for
+  external conflicts. Bulk saves preflight every tone and reject duplicate slots.
+- Full restore mock checks cover complete exact-model preflight, all stored roots,
+  settling interval, one all-data export and final selection. Staging failure,
+  settling cancellation and missing export ack never retry/select; failed export
+  attempts nonpersistent unmute cleanup. No hardware rollback is promised.
+- The preview gate accepts only bounded one-byte macros and TAP presses, not
+  generic TEMP/command writes. Reads/acks retain unsolicited updates. Multi-block
+  notifications and coordinated readbacks preserve unsent edits and future fields.
+- Collection restart/previous-copy, filesystem locking/revision conflicts, corrupt
+  files, collection transfer validation and pretty-JSON size limits are tested.
+  Oversized exports cannot overwrite a valid file or create an unreadable export.
+- PNG type/dimensions/size and icon-key paths are validated; custom icons are copied
+  locally without changing tones or queuing MIDI. Native portal choice isn't automated.
 
 Protocol golden fixtures are derived from static source observations. The separate
 KATANA-50 reverb fixture is captured hardware traffic from our strict read-only
@@ -105,5 +127,14 @@ all four screenshots. Current typography/DPI checks use `analysis/brand-*` (earl
 wordmark checks used `analysis/wordmark-*`). Release screenshots are in
 `docs/screenshots/{puppet,justice,kill,lightning}.png`.
 
-Command logs remain in the parent workspace's `analysis/` directory. Detailed
-static evidence is in `evidence/` and `docs/INVESTIGATION.md`.
+The feature implementation checks use `analysis/parity-implementation-*` in the
+parent workspace, including an offline native screenshot and retained REA summary.
+Metadata recovery was re-run in memory and exactly reproduces the shipped controls,
+assignment tables, chains, selectors, groups and source digests. Full source records
+are in `evidence/rea-feature-implementation-bundle.json` (git-ignored).
+
+**No amplifier traffic was sent for this feature implementation.** New write paths
+were tested only with memory transports. Real Gen 3 TSL/ALB round trips, firmware
+write/notification timing, audible equivalence and reboot persistence remain
+unverified. The agent's strict read-only hardware-testing restriction is unchanged.
+The detailed current coverage/scope is in [PARITY.md](PARITY.md).

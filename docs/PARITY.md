@@ -1,55 +1,71 @@
-# Feature parity and remaining work
+# Feature coverage and verification boundary
 
-**This is not a completed full-functionality replacement.** A recovered address
-map is not application parity, and a passing mock transaction test is not hardware
-verification. This document tracks technical coverage and remaining work, not a goal to copy
-Tone Studio one-to-one. The user guide is [README.md](../README.md).
+Rusty Boss aims for the useful non-marketplace workflows, **not** the vendor's
+complexity or a pixel clone. The user explicitly excluded Tone Central/Exchange,
+legacy preset conversion, localization and manuals. These are not backlog items.
+A recovered parameter count or passing mock test is not hardware parity.
 
-| Area / investigation question | Evidence status | Rusty Boss implementation | Verification / remaining work |
-|---|---|---|---|
-| Identify both supplied releases | Answered statically | Schema identifies 1.1.0 (26) | Installer/app hashes in investigation |
-| Find packaged editor/protocol | Answered for selected JS files | Independent Rust codec + factual generated schema | No native wrapper execution; not all 149 relevant files semantically analyzed |
-| Compare platforms | Answered within HTML subtree | Shared schema used | Does not prove native wrapper/platform equivalence |
-| Parameter address/encoding/ranges/defaults | Answered for shipped map | 106 blocks / 2,463 instances; bounds/encoding tests | New firmware and undocumented addresses unknown |
-| Amp/effect/EQ/solo/contour/pedal/SR controls | Selected UI workflows recovered statically | Single amp/effect editor, algorithm-specific pages and color banks; 951 numeric UI bindings; no raw fallback | Some recovered units and dependencies; complete coordinated-control/type-change semantics remain incomplete |
-| System, USB, line-out, MIDI, global EQ | Partially answered | System backup reads retained; generic system editing removed from the simplified UI | No automatic persistence or bulk system restore; hardware untested |
-| Model differentiation | Static identity/capabilities found | Codes 05..0B, channel masks; Bloom and solo-delay visibility; offline model preview | Power/GA-FC and exhaustive capability filtering incomplete |
-| Color-bank changes / assignments | Selected bank/page bindings recovered | Friendly green/red/yellow banks, independent MOD/FX and shared DELAY2/REVERB color; basic knob/footswitch selectors | Full layer/panel coordination, dynamic assignment PIDs/ranges and pedal calibration incomplete |
-| Chain/routing | Original base/EQ tables statically recovered | Nine patterns, position selectors and clickable ordered diagram; 54 base / 216 complete combinations tested | No drag/reorder interaction or exact vendor geometry/bypass artwork |
-| Connection | Static handshake recovered | ALSA discovery + identity + level + mode | Needs actual Gen 3, supported kernel and device ports; no BLE backend |
-| Live editing | Static DT1 observed in source | Successful preview/readback or current-sound copy automatically links parameter controls when permitted; idle DT1 updates | Device notifications during other transactions can be consumed; no exhaustive event reconciliation |
-| PANEL editing / persistent PANEL settings | Original write/export handler accepts destination 0 in static code; reboot persistence described by user, not independently tested | Can read PANEL and edit the current sound after selecting PANEL on the amp; no PANEL selector/save target or editable TEMP macro controls | Missing workflow; slot-0 write rejection is our restriction, not a device limitation. Separate persisted effect assignments from physical-knob-controlled values and verify safely. |
-| Channel selection | Static command recovered | Send select, confirm current number, then read buffer | Timing/hardware behavior unverified |
-| Preview | Static temporary-write logic found | Click-to-preview validated patch snapshot, automatic readback and generation-safe live linking; latest pending click wins | Read-only stored knob blocks intentionally omitted; audible parity unverified |
-| Persistent write | Static write/export sequence found | Per-packet permission gate, saved writes locked by default; Yes/No unlock, drag-to-channel with snapshot + overwrite confirmation; model/slot guards | Acknowledgement semantics, mute/export timing and failure cleanup still require hardware tests |
-| Local librarian | Static file model found | One in-memory liveset, notes, rename/duplicate/delete/reorder; explicit TSL save/load | Library-to-channel drag/drop and native TSL file chooser/file-drop import available; multi-liveset storage/search, multiselect and bulk transfer incomplete |
-| Gen 3 TSL interchange | Static JSON model recovered | Hex-string byte arrays, metadata/unknown fields, default-tail fill | Tests use constructed documents; real exported-file/original-app round trips still required |
-| MkI/MkII TSL conversion | Converter files located | Explicit rejection instead of guessed conversion | Conversion tables and regression fixtures need reconstruction |
-| ALB backup | Static format/read model recovered | File codec, patch extraction, experimental sequential hardware read | No atomic snapshot guarantee; actual vendor restore validation outstanding |
-| All-data hardware restore | Partially traced | **Unavailable** | Must trace export/staging/mute sequence and verify safely before implementation |
-| Tone Exchange | Packaged URL configuration observed | Open official page in external browser; local Gen 3 TSL import | Not integrated authentication/upload/download or guaranteed service compatibility |
-| Tone Central / tips / log services | Endpoints located, not contacted | Not implemented | Need declared runtime/network evidence and current service behavior |
-| Vendor UI, localization, onboarding/help | Selected UI metadata/controllers analyzed | Independent focused Editor/Library/Settings UI, four persistent themes, user guide; no vendor assets at runtime | Not a pixel clone; localization, tips, exact layout and full interaction parity incomplete |
-| Linux audio | Not established by editor sources | No DSP/audio engine | Tone Studio controls hardware DSP; audio routing/kernel support is separate |
-| Hardware regression testing | **User-reported initial success; not independently verified** | Mock transport, codec/data/UI tests; UI-focused pass used no attached device | Needs exact model/firmware, vendor TSL/ALB fixtures and bounded USB-MIDI recordings |
+## Current implementation
 
-See [PRESET-WORKFLOW.md](PRESET-WORKFLOW.md) for the current workflow, evidence,
-safety policy and test boundary. [UI-RECONSTRUCTION.md](UI-RECONSTRUCTION.md)
-records the earlier editor milestone.
+| Area | Available now | Remaining boundary |
+|---|---|---|
+| Tone editor | Amp/effect algorithms, EQ/EQ2, solo, contour, pedal FX, send/return, color banks; 1,243 recovered UI bindings | Bindings include alternative/dynamic presentations, not unique features. Not every vendor conditional visibility rule is reproduced. |
+| Routing | Nine patterns, constrained diagram moves and destination menus; 216 complete combinations tested | Unsupported routes are rejected, never approximated. |
+| Panel macros / tap / layers | Dedicated bounded TEMP macro commands with coordinated patch readback; live PATCH watcher notifications; delay/Delay 2/solo-delay taps; per-color Delay 2/Reverb layer selector | No invented physical-knob scaling. Macro edits need a valid live snapshot; notifications are not continuous polling. Hardware behavior is unverified. |
+| System settings | One collapsed Amp settings section: global EQ banks/type/position, line-out Air Feel/custom mic/ambience, Power Amp In, model-dependent power control, USB levels/loopback, MIDI PC/CC/channel, system GA-FC | Read first, stage locally, explicitly confirm Apply. Only changed values are sent, after checking for external changes. Reads/writes are sequential, not atomic. |
+| Assignments | Algorithm-dependent knob targets; expression function/target/heel/toe; amp tip/ring, GA-FC/EX and expanded GA-FC/EX | 34 literal target tables recovered. Inverted ranges are supported. Controller/algorithm changes preserve inactive settings; target changes reset the active range. Model-specific hardware behavior remains unverified. |
+| Connection / live changes | Explicit ALSA connect; identity/slot masks; preview/readback; single-parameter edits; retained unsolicited updates during reads/acks | Native wrappers and firmware timing were not executed/validated. Notification backlogs are bounded; overflow fails rather than silently dropping updates. |
+| Channel/PANEL saves | Snapshot capture, permission gate and overwrite confirmation; full bulk preflight; ordered multi-channel saves | Earlier successful writes are not rolled back on later failure/cancellation. Reboot persistence and audible results remain unverified. |
+| Local collections | Multiple collections, automatic local saves, previous-file copy, cross-instance revision checks, multiselect copy/move/delete, selected channel reads and writes | One bounded 16 MiB JSON library; up to 100 collections and 1,000 tones per collection. Corrupt/changed files are not silently overwritten. Latest edits before autosave can be lost on a crash. |
+| TSL files | Gen 3 import adds a collection; native chooser/file drop; explicit current-collection export; metadata/unknown-field retention | Real vendor-app round trips still need fixtures. Legacy conversion is intentionally excluded. |
+| ALB backup / restore | Sequential reads, file codec, patch extraction, exact-model full restore: validated system/slot staging, 10-second wait, one acknowledged all-data export, restore channel selection | Experimental and hardware-unverified. Incomplete/wrong-model backups are rejected before any write. Cancellation/failure can leave a partial restore. Do not use as your only backup/restore tool. |
+| Custom icons | Local, bounded PNG imports per algorithm, rendered on cards and chain; reset to defaults | Original/vendor artwork is not shipped. Broken local images fall back to text. |
+| Appearance / navigation | Editor, Library, Settings; four themes; advanced settings and transfers disclosed only when requested | No separate raw editor, marketplace, onboarding stack, manuals or language system. |
 
-## Suggested next milestones
+## New static evidence
 
-1. Obtain a sacrificial/fully backed-up Gen 3 test amplifier and record its model,
-   firmware and Linux kernel/ALSA port identity. Begin with identity and read-only
-   comparisons against original Tone Studio exports; no writes.
-2. Verify every requested byte of a current patch, model-specific slot layout,
-   system settings and ALB rows. Add sanitized fixtures and regression tests.
-3. Compare single-parameter writes/notifications and type/color changes; add
-   capability gating and human-unit display mappings.
-4. Validate preview -> readback -> persistent commit, including timeout, USB loss,
-   mute/unmute and reconnect. Do not infer rollback from a missing acknowledgement.
-5. Trace and implement bulk restore/export staging; verify each channel independently.
-6. Port legacy converters and higher-level chain/assignment workflows with fixtures.
-7. Add local multi-library persistence, desktop usability/accessibility refinements,
-   packaging and optional service integrations. Do not hard-code private credentials
-   or turn recorded endpoint strings into claims of current service availability.
+The supplied macOS 1.1.0 (26) HTML tree retains identity
+`fcfd680fb9b2bbd9194ea1002e9f70dbacfd27881790aeb372220a0fd0c50181`.
+New REA parent:
+`ev_b647de37786d6578ee457946a188ac43e6fa1c5866eccfd96cd57ea9cd76bcbb`.
+Summary: `ev_700180283852d5251afe2f21564d0722283a202e7d81fb8b0d59c8bcf2dc88a1`.
+Complete local records: `evidence/rea-feature-implementation-bundle.json`
+(git-ignored); summary: `analysis/parity-implementation-rea-summary.json` in the
+parent workspace. Nine selected JS files parsed; 140 other inventoried sources and dynamic/global
+relationships remain outside this analysis. No vendor code was executed.
+
+Key source anchors under the extracted `html/` tree:
+
+- `js/businesslogic/ktn/assign_setting.js`: literal target lists/knob offsets.
+  `assign_controller.js`: dynamic algorithm targets, heel/toe bias/format and
+  expanded-controller remapping. `tools/recover_editor.py` parses inert facts;
+  no JS evaluation or vendor runtime is included.
+- `js/businesslogic/bts/effect_controller.js`: TAP command addresses, TEMP/PATCH
+  watcher coupling and color/layer wiring; `export/item.json` supplies bindings.
+- `js/businesslogic/bts/backup/all_data.js`: system/stored-row staging;
+  `all_backup.js` restore completion: 10-second settling, all-data export, final
+  selection. `patch_controller.js::sendCommandExport` defines mute + `7F 7F`
+  export and acknowledgement matching.
+
+Independent design choices: explicit staged Apply, optimistic setting conflict
+checks, strict complete/exact-model restore preflight, no automatic write retries,
+local atomic autosave with previous copy, and confirmed ordered single-channel
+commits for bulk tone saves instead of duplicating vendor librarian machinery.
+
+## Verification
+
+Offline tests cover target tables/ranges (including signed and expanded bindings),
+system Apply/conflict checks, macro/tap packet bounds, full restore root/order/
+export preflight, bulk validation/partial failures, notification retention,
+collection restart/corruption/concurrency handling, icon validation, GUI state
+and rendering. See [VALIDATION.md](VALIDATION.md) for commands/results.
+
+**No amplifier traffic was sent in this implementation pass.** All new hardware
+write paths were exercised only with memory transports. The standing agent test
+policy remains absolute read-only, including no editor-mode setup/cleanup. The
+old KATANA-50 reverb fixture verifies only its narrow historical read slice.
+
+Next work is validation and refinement, not more feature categories: real Gen 3
+TSL/ALB fixtures; model/firmware-specific read comparisons; desktop portal and
+usability/accessibility checks. Hardware writes require a separate explicit
+change to the user's read-only testing authorization.

@@ -3,6 +3,11 @@ use super::*;
 use crate::editor::{self, Control, Edit, Section};
 use crate::safety::Access;
 use egui::{vec2, Sense, Stroke};
+mod assignments;
+#[cfg(test)]
+mod chain_tests;
+#[cfg(test)]
+mod tests;
 fn card(ui: &egui::Ui) -> egui::Frame {
     egui::Frame::new()
         .fill(ui.visuals().window_fill)
@@ -49,8 +54,18 @@ fn rotary(
         let (rect, r) = ui.allocate_exact_size(vec2(122., 72.), Sense::click_and_drag());
         let mut r = r.on_hover_text("Drag up/down to adjust · Arrow keys for single steps\nClick the value below to type an exact value");
         r.widget_info(|| egui::WidgetInfo::slider(ui.is_enabled(), value as f64, &c.label));
-        if r.clicked() {
+        if r.clicked() || r.drag_started() {
             r.request_focus();
+        }
+        if r.clicked() {
+            ui.ctx().request_discard("Initialize rotary keyboard focus");
+        }
+        if r.has_focus() {
+            ui.memory_mut(|m| m.set_focus_lock_filter(r.id, egui::EventFilter {
+                horizontal_arrows: true,
+                vertical_arrows: true,
+                ..Default::default()
+            }));
         }
         if r.drag_started() {
             ui.data_mut(|d| d.insert_temp(r.id.with("fraction"), value as f32));
@@ -66,21 +81,19 @@ fn rotary(
             changed = n != value;
             value = n;
         }
-        if r.has_focus() {
-            let step = ui.input(|i| {
-                if i.key_pressed(egui::Key::ArrowUp) || i.key_pressed(egui::Key::ArrowRight) {
-                    1
-                } else if i.key_pressed(egui::Key::ArrowDown) || i.key_pressed(egui::Key::ArrowLeft)
-                {
-                    -1
-                } else {
-                    0
-                }
+        if ui.is_enabled() && r.has_focus() {
+            let step = ui.input_mut(|i| {
+                let modifiers = egui::Modifiers::NONE;
+                i.count_and_consume_key(modifiers, egui::Key::ArrowUp) as i32
+                    + i.count_and_consume_key(modifiers, egui::Key::ArrowRight) as i32
+                    - i.count_and_consume_key(modifiers, egui::Key::ArrowDown) as i32
+                    - i.count_and_consume_key(modifiers, egui::Key::ArrowLeft) as i32
             });
             if step != 0 {
-                value = (value + step).clamp(min, max);
-                changed = true;
-                finished = true;
+                let new = value.saturating_add(step).clamp(min, max);
+                changed |= new != value;
+                value = new;
+                finished = changed;
             }
         }
         if changed {
@@ -157,19 +170,37 @@ fn rotary(
                 egui::DragValue::new(&mut value)
                     .range(min..=max)
                     .clamp_existing_to_range(false)
-                    .speed(0.25)
+                    .speed(1.)
                     .custom_formatter(|v, _| c.text(v as i32))
                     .custom_parser(|text| c.parse_text(text)),
             );
+            if r.gained_focus() {
+                ui.ctx().request_discard("Initialize numeric keyboard focus");
+            }
+            if r.has_focus() {
+                ui.memory_mut(|m| {
+                    m.set_focus_lock_filter(r.id, egui::EventFilter {
+                        horizontal_arrows: true,
+                        vertical_arrows: true,
+                        ..Default::default()
+                    });
+                });
+            }
             changed |= r.changed();
             finished |= r.drag_stopped() || r.lost_focus() || (r.changed() && !r.dragged());
         }
     });
-    (value, changed, finished)
+    let gesture = ui.id().with("rotary-edited");
+    let edited = changed || ui.data(|d| d.get_temp::<bool>(gesture).unwrap_or(false));
+    ui.data_mut(|d| d.insert_temp(gesture, edited && !finished));
+    (value, changed, finished && edited)
 }
 
+#[derive(Clone)]
+struct ChainDrag(String);
+
 impl App {
-    fn model_code(&self) -> u8 {
+    pub(super) fn model_code(&self) -> u8 {
         self.connected
             .as_ref()
             .map(|i| i.model_code)
@@ -418,7 +449,7 @@ impl App {
             _ => None,
         }
     }
-    fn type_name(&self, section: Section) -> String {
+    pub(super) fn type_name(&self, section: Section) -> String {
         self.selector(section)
             .and_then(|id| self.catalog.control(id))
             .map(|c| self.remap_controls(section, c))
@@ -510,15 +541,53 @@ impl App {
             })
             .collect()
     }
-    fn panel_snapshot(&self, ui: &mut egui::Ui, section: Section) {
-        let value = self
+    fn panel_snapshot(&mut self, ui: &mut egui::Ui, section: Section) {
+        let Some(snapshot) = self
             .patch_set()
-            .and_then(|set| self.catalog.panel_position(&self.schema, set, section));
-        ui.horizontal(|ui| {
-            ui.label(RichText::new("PANEL").size(10.).color(ui.visuals().weak_text_color()));
-            ui.label(RichText::new(value.map(|n| n.to_string()).unwrap_or_else(|| "—".into())).size(20.).strong());
-            ui.label(RichText::new("/ 100").size(10.).color(ui.visuals().weak_text_color()));
-        }).response.on_hover_text("Panel macro position from the last patch snapshot, not a live position meter.\nThis is separate from the algorithm's Effect Level. A dash means the device did not supply a position.");
+            .and_then(|set| self.catalog.panel_position(&self.schema, set, section))
+        else {
+            ui.weak("PANEL —")
+                .on_hover_text("Position unavailable; read or preview the amp sound first.");
+            return;
+        };
+        let index = if section == Section::Solo {
+            5
+        } else {
+            section.color_index().unwrap_or(0)
+        };
+        let enabled = self.live
+            && !self.busy
+            && self.pending_edits.is_empty()
+            && self.connected.is_some()
+            && self.write_gate.access() != Access::ReadOnly;
+        let id = ui.id().with(("panel-macro", index, self.generation));
+        let value = ui.data(|d| d.get_temp::<i32>(id)).unwrap_or(snapshot);
+        let c = Control {
+            id: format!("panel-macro-{index}"),
+            block: String::new(),
+            offset: 0,
+            label: "PANEL".into(),
+            choices: vec![],
+            display: "raw".into(),
+            min: Some(0),
+            max: Some(100),
+            bias: 1,
+        };
+        let (new, changed, finished) = ui
+            .add_enabled_ui(enabled, |ui| {
+                rotary(ui, &c, value, 0, 100, self.theme.accent())
+            })
+            .inner;
+        if changed {
+            ui.data_mut(|d| d.insert_temp(id, new));
+        }
+        if finished {
+            ui.data_mut(|d| d.remove::<i32>(id));
+            if enabled && new != snapshot {
+                #[cfg(feature = "midi")]
+                self.submit(Job::Macro(self.generation, index, new));
+            }
+        }
     }
     fn effects_row(&mut self, ui: &mut egui::Ui) {
         let columns = ((ui.available_width() + 10.) / 173.).floor().clamp(1., 5.) as usize;
@@ -549,6 +618,9 @@ impl App {
                             ui.vertical(|ui| {
                                 ui.spacing_mut().item_spacing.y = 6.;
                                 ui.set_width(width);
+                                if let Some(icon) = self.effect_icon(ui.ctx(), section) {
+                                    ui.image((icon.id(), vec2(32., 32.)));
+                                }
                                 if ui
                                     .add_sized(
                                         [width, 28.],
@@ -601,6 +673,8 @@ impl App {
             );
             return;
         };
+        let mut movement = None;
+        let enabled = !self.blocking_operation();
         egui::ScrollArea::horizontal()
             .id_salt("signal-chain")
             .show(ui, |ui| {
@@ -628,14 +702,54 @@ impl App {
                             "fv" => "VOLUME",
                             _ => "OUT",
                         });
-                        if ui
-                            .add(
-                                egui::Button::new(RichText::new(text).size(10.).strong())
-                                    .selected(section == Some(self.section))
-                                    .min_size(vec2(44., 32.)),
-                            )
-                            .clicked()
-                        {
+                        let label = RichText::new(text).size(10.).strong();
+                        let button =
+                            match section.and_then(|section| self.effect_icon(ui.ctx(), section)) {
+                                Some(icon) => egui::Button::image_and_text(
+                                    egui::Image::new((icon.id(), vec2(24., 24.))),
+                                    label,
+                                ),
+                                None => egui::Button::new(label),
+                            };
+                        let r = ui.add_enabled(
+                            enabled,
+                            button
+                                .selected(section == Some(self.section))
+                                .sense(Sense::click_and_drag())
+                                .min_size(vec2(44., 32.)),
+                        );
+                        let movable =
+                            !["in", "speaker", "amp", "fv", "dly2", "rev"].contains(&id.as_str());
+                        if movable {
+                            r.dnd_set_drag_payload(ChainDrag(id.clone()));
+                            r.context_menu(|ui| {
+                                ui.label("Move after:");
+                                for target in &chain {
+                                    if let Ok(route) =
+                                        self.catalog.move_in_chain(&chain, id, target)
+                                    {
+                                        if ui.button(target.to_uppercase()).clicked() {
+                                            movement = Some(route);
+                                            ui.close_menu();
+                                        }
+                                    }
+                                }
+                            });
+                        }
+                        if let Some(source) = r.dnd_hover_payload::<ChainDrag>() {
+                            if let Ok(route) = self.catalog.move_in_chain(&chain, &source.0, id) {
+                                ui.painter().rect_stroke(
+                                    r.rect,
+                                    4.,
+                                    Stroke::new(2_f32, self.theme.accent()),
+                                    egui::StrokeKind::Outside,
+                                );
+                                if enabled && r.dnd_release_payload::<ChainDrag>().is_some() {
+                                    movement = Some(route);
+                                }
+                            }
+                        }
+                        if r.clicked() {
                             if let Some(s) = section {
                                 self.section = s;
                             }
@@ -643,6 +757,24 @@ impl App {
                     }
                 });
             });
+        if let Some(route) = movement {
+            for ((block, offset), value) in [
+                ("PATCH%OTHER", 0),
+                ("PATCH%PEDALFX_COM", 0),
+                ("PATCH%SENDRETURN", 1),
+                ("PATCH%EQ_EACH(1)", 0),
+                ("PATCH%EQ_EACH(2)", 0),
+            ]
+            .into_iter()
+            .zip(route)
+            {
+                if self.number(block, offset) != value {
+                    if let Some(c) = self.simple(block, offset, "Routing") {
+                        self.set_control(&c, value);
+                    }
+                }
+            }
+        }
     }
     fn details(&mut self, ui: &mut egui::Ui) {
         let section = self.section;
@@ -659,11 +791,43 @@ impl App {
             }
         });
         ui.add_space(10.);
+        self.icon_tools(ui, section);
+        if matches!(section, Section::Delay | Section::Delay2 | Section::Solo)
+            && (section != Section::Solo || editor::solo_delay(self.model_code()))
+            && ui
+                .add_enabled(
+                    self.live
+                        && !self.busy
+                        && self.pending_edits.is_empty()
+                        && self.write_gate.access() != Access::ReadOnly,
+                    egui::Button::new("Tap tempo"),
+                )
+                .clicked()
+        {
+            #[cfg(feature = "midi")]
+            self.submit(Job::Tap(match section {
+                Section::Delay => 0,
+                Section::Delay2 => 1,
+                _ => 2,
+            }));
+        }
+        if matches!(section, Section::Reverb | Section::Delay2) {
+            if let Some(mut c) = self.catalog.control(&format!(
+                "reverb-layer-mode-{}-select-box",
+                ["grn", "red", "ylw"][self.color(section)]
+            )) {
+                c.label = "Delay 2 / Reverb layer".into();
+                self.dropdown(ui, c);
+            }
+        }
+        if section == Section::Solo && editor::solo_delay(self.model_code()) {
+            self.panel_snapshot(ui, section);
+        }
         if section == Section::Reverb {
             ui.horizontal_wrapped(|ui| {
                 self.panel_snapshot(ui, section);
-                ui.label(RichText::new("Snapshot macro position · separate from Effect Level").size(12.).color(ui.visuals().weak_text_color()))
-                    .on_hover_text("The panel knob is an assignable macro. Effect Level below is the algorithm parameter; the two numbers need not match. This readout is from the last patch read, not continuous telemetry.");
+                ui.label(RichText::new("Assignable panel macro · separate from Effect Level").size(12.).color(ui.visuals().weak_text_color()))
+                    .on_hover_text("Preview a tone to enable this macro. The firmware coordinates its assigned parameters; values are read back after each gesture.");
             });
             ui.add_space(12.);
         }
@@ -698,7 +862,7 @@ impl App {
                         }
                     }
                 });
-                ui.small("Nine original chain patterns. Position selectors update the diagram; selecting a diagram block opens its editor. Drag-to-reorder is not implemented.");
+                ui.small("Drag a block onto another to move it after that block, or right-click for destinations. Only amp-supported routes are allowed. Click a block to open its editor.");
             }
             Section::Amp => {
                 let fields = [
@@ -711,25 +875,7 @@ impl App {
                 .collect();
                 self.field_rows(ui, fields, self.theme.accent());
             }
-            Section::Assignments => {
-                ui.label("Panel knob functions and footswitches");
-                let ids = [
-                    "asgn-knobs-booster-select-box",
-                    "asgn-knobs-mod-select-box",
-                    "asgn-knobs-fx-select-box",
-                    "asgn-knobs-delay-select-box",
-                    "asgn-knobs-reverb-select-box",
-                    "asgn-pedal-function-select-box",
-                    "asgn-tip-function-select-box",
-                    "asgn-ring-function-select-box",
-                ];
-                for id in ids {
-                    if let Some(c) = self.catalog.control(id) {
-                        self.dropdown(ui, c);
-                    }
-                }
-                ui.small("Detailed expression ranges and GA-FC routing are not yet available in this editor.");
-            }
+            Section::Assignments => self.assignments_ui(ui),
             _ => {
                 let fields = self.detail_controls(section);
                 if fields.is_empty() {

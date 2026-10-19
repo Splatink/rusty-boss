@@ -86,6 +86,14 @@ impl AlsaTransport {
     }
 }
 impl Transport for AlsaTransport {
+    fn wait(&mut self, duration: Duration) -> Result<()> {
+        let deadline = Instant::now() + duration;
+        while Instant::now() < deadline {
+            self.check()?;
+            thread::sleep(Duration::from_millis(10));
+        }
+        self.check()
+    }
     fn send(&mut self, bytes: &[u8]) -> Result<()> {
         while Instant::now() < self.next_send {
             self.check()?;

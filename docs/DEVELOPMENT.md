@@ -6,7 +6,7 @@ Rusty Boss is a native Rust/egui Linux editor for KATANA Gen 3. The user guide i
 
 ## Build
 
-Install Rust, a C toolchain, pkg-config, ALSA headers and a working X11 or Wayland
+Install Rust 1.89 or newer, a C toolchain, pkg-config, ALSA headers and a working X11 or Wayland
 desktop with OpenGL/EGL support. Typical distribution packages:
 
 - Fedora: `gcc gcc-c++ pkgconf-pkg-config alsa-lib-devel libxkbcommon-devel wayland-devel mesa-libEGL-devel`
