@@ -17,7 +17,8 @@ fn frame(
     enabled: bool,
 ) -> (egui::FullOutput, bool, bool) {
     let mut result = (*value, false, false);
-    let output = ctx.run(
+    let output = crate::gui::tests::run_ui(
+        ctx,
         egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(
                 egui::Pos2::ZERO,
@@ -26,8 +27,8 @@ fn frame(
             events,
             ..Default::default()
         },
-        |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
+        |ui| {
+            egui::CentralPanel::default().show(ui, |ui| {
                 ui.add_enabled_ui(enabled, |ui| {
                     result = rotary(ui, c, *value, 0, 100, Color32::WHITE);
                 });

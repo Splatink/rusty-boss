@@ -9,7 +9,7 @@ use rusty_boss::{
 fn recorded_katana50_snapshot_has_panel_52_and_spring_level_68() {
     use rusty_boss::{
         document::ParamSet,
-        protocol::{Message, IDENTITY_REQUEST},
+        protocol::{IDENTITY_REQUEST, Message},
     };
     let report: serde_json::Value =
         serde_json::from_str(include_str!("fixtures/katana50-reverb-readonly.json")).unwrap();

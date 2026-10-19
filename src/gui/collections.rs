@@ -7,7 +7,16 @@ impl App {
         if let Some(p) = path.as_ref().filter(|p| p.exists()) {
             match Library::load(p, schema) {
                 Ok(library) => return (library, path, None),
-                Err(e) => return (Library::new(schema), None, Some(format!("Cannot load {}: {e:#}. Original file preserved; autosave disabled. Export your work before closing.", p.display()))),
+                Err(e) => {
+                    return (
+                        Library::new(schema),
+                        None,
+                        Some(format!(
+                            "Cannot load {}: {e:#}. Original file preserved; autosave disabled. Export your work before closing.",
+                            p.display()
+                        )),
+                    );
+                }
             }
         }
         let error = (!isolated && path.is_none()).then(|| {

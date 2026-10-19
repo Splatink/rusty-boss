@@ -18,7 +18,8 @@ fn diagram_drag_updates_routing_and_queues_only_changed_parameters() {
     app.live = true;
     app.synced = true;
     let mut frame = |events| {
-        ctx.run(
+        crate::gui::tests::run_ui(
+            &ctx,
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,
@@ -27,8 +28,8 @@ fn diagram_drag_updates_routing_and_queues_only_changed_parameters() {
                 events,
                 ..Default::default()
             },
-            |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| app.chain_view(ui));
+            |ui| {
+                egui::CentralPanel::default().show(ui, |ui| app.chain_view(ui));
             },
         )
     };

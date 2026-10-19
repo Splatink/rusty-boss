@@ -40,7 +40,7 @@ fn layout(size: f32, ink: Color32, accent: Color32) -> egui::text::LayoutJob {
 pub(super) fn show(ui: &mut egui::Ui, accent: Color32) -> egui::Response {
     let ink = ui.visuals().text_color();
     let mut size = SIZE;
-    let mut galley = ui.fonts(|f| f.layout_job(layout(size, ink, accent)));
+    let mut galley = ui.fonts_mut(|f| f.layout_job(layout(size, ink, accent)));
     let available = ui.available_width().max(1.);
     // Font hinting/letter spacing make width slightly nonlinear. Recheck the actual
     // layout rather than clipping a last letter after a single proportional fit.
@@ -49,14 +49,14 @@ pub(super) fn show(ui: &mut egui::Ui, accent: Color32) -> egui::Response {
             break;
         }
         size *= (available - 1.).max(1.) / galley.size().x;
-        galley = ui.fonts(|f| f.layout_job(layout(size, ink, accent)));
+        galley = ui.fonts_mut(|f| f.layout_job(layout(size, ink, accent)));
     }
     let (rect, response) = ui.allocate_exact_size(
         egui::vec2(galley.size().x.min(available), HEIGHT),
         egui::Sense::hover(),
     );
     response.widget_info(|| {
-        egui::WidgetInfo::labeled(egui::WidgetType::Label, ui.is_enabled(), "Rusty Boss")
+        egui::WidgetInfo::labeled(egui::Role::Label, ui.is_enabled(), "Rusty Boss")
     });
     if ui.is_rect_visible(rect) {
         let pos =
@@ -85,8 +85,8 @@ mod tests {
         // Same context, including a move back to 1x: exercise the monitor-change path.
         for ppp in [1., 1.5, 2., 3., 1.] {
             ctx.set_pixels_per_point(ppp);
-            let output = ctx.run(Default::default(), |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| {
+            let output = crate::gui::tests::run_ui(&ctx, Default::default(), |ui| {
+                egui::CentralPanel::default().show(ui, |ui| {
                     show(ui, Theme::Puppet.accent());
                 });
             });
@@ -115,7 +115,7 @@ mod tests {
     #[test]
     fn dedicated_family_does_not_restyle_the_ui() {
         let ctx = egui::Context::default();
-        let text_styles = ctx.style().text_styles.clone();
+        let text_styles = ctx.global_style().text_styles.clone();
         let sample = || {
             egui::text::LayoutJob::simple(
                 "Body text remains the same".into(),
@@ -125,14 +125,14 @@ mod tests {
             )
         };
         let mut before = egui::Vec2::ZERO;
-        let _ = ctx.run(Default::default(), |ctx| {
-            before = ctx.fonts(|f| f.layout_job(sample())).size();
+        let _ = crate::gui::tests::run_ui(&ctx, Default::default(), |ui| {
+            before = ui.fonts_mut(|f| f.layout_job(sample())).size();
         });
         install(&ctx);
-        let _ = ctx.run(Default::default(), |ctx| {
-            assert_eq!(ctx.fonts(|f| f.layout_job(sample())).size(), before);
+        let _ = crate::gui::tests::run_ui(&ctx, Default::default(), |ui| {
+            assert_eq!(ui.fonts_mut(|f| f.layout_job(sample())).size(), before);
         });
-        assert_eq!(ctx.style().text_styles, text_styles);
+        assert_eq!(ctx.global_style().text_styles, text_styles);
     }
     #[test]
     fn themes_and_constrained_widths_keep_a_readable_single_line() {
@@ -143,8 +143,8 @@ mod tests {
             for ppp in [1., 2., 3.] {
                 ctx.set_pixels_per_point(ppp);
                 for width in [120., 180., 260.] {
-                    let output = ctx.run(Default::default(), |ctx| {
-                        egui::CentralPanel::default().show(ctx, |ui| {
+                    let output = crate::gui::tests::run_ui(&ctx, Default::default(), |ui| {
+                        egui::CentralPanel::default().show(ui, |ui| {
                             let area = egui::Rect::from_min_size(
                                 ui.cursor().min,
                                 egui::vec2(width, HEIGHT),

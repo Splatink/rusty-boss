@@ -1,4 +1,4 @@
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 use clap::{Parser, Subcommand};
 use rusty_boss::{
     document::{Backup, LiveSet, Patch},
@@ -159,7 +159,9 @@ fn main() -> Result<()> {
             {
                 let ports = rusty_boss::midi::ports()?;
                 if ports.is_empty() {
-                    println!("No duplex raw MIDI ports. Connect the amp via USB and check ALSA driver support.");
+                    println!(
+                        "No duplex raw MIDI ports. Connect the amp via USB and check ALSA driver support."
+                    );
                 }
                 for p in ports {
                     println!("{}  {}", p.address, p.name);

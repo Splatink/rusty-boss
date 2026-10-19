@@ -154,8 +154,8 @@ mod tests {
                     .set(&app.schema, &mut app.library.data[0][0].parameters, value)
                     .unwrap();
                 let before = app.library.data[0][0].parameters.clone();
-                let _ = ctx.run(egui::RawInput::default(), |ctx| {
-                    egui::CentralPanel::default().show(ctx, |ui| {
+                let _ = crate::gui::tests::run_ui(&ctx, egui::RawInput::default(), |ui| {
+                    egui::CentralPanel::default().show(ui, |ui| {
                         app.expression_ui(ui, pedal, expanded);
                     });
                 });

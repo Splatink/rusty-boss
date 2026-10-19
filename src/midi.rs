@@ -1,17 +1,16 @@
 //! Linux ALSA raw MIDI; selecting a port does not send anything until Connect.
 use crate::{protocol::Decoder, session::Transport};
 use alsa::{
-    card,
+    Ctl, Direction, card,
     rawmidi::{Iter, Rawmidi},
-    Ctl, Direction,
 };
-use anyhow::{ensure, Context, Result};
+use anyhow::{Context, Result, ensure};
 use std::{
     collections::BTreeMap,
     io::{Read, Write},
     sync::{
-        atomic::{AtomicBool, Ordering},
         Arc,
+        atomic::{AtomicBool, Ordering},
     },
     thread,
     time::{Duration, Instant},

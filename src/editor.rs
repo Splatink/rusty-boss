@@ -3,7 +3,7 @@ use crate::{
     document::ParamSet,
     schema::{Choice, Parameter, Schema},
 };
-use anyhow::{ensure, Context, Result};
+use anyhow::{Context, Result, ensure};
 use serde::Deserialize;
 use std::collections::BTreeMap;
 #[derive(Clone, Debug, Deserialize)]

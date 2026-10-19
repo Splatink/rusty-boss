@@ -27,9 +27,8 @@ impl App {
                 }
                 let changed = self.system.as_ref().is_some_and(|s| s.before != s.values);
                 if ui.add_enabled(changed && !self.busy && self.connected.is_some() && self.write_gate.access() == Access::Persistent, egui::Button::new("Apply to amp…")).clicked() { self.confirm = Some("apply-system".into()); }
-                if ui.add_enabled(changed && !self.busy,egui::Button::new("Discard changes")).clicked() {
-                    if let Some(draft) = &mut self.system { draft.values = draft.before.clone(); }
-                }
+                if ui.add_enabled(changed && !self.busy,egui::Button::new("Discard changes")).clicked()
+                    && let Some(draft) = &mut self.system { draft.values = draft.before.clone(); }
             });
             if self.system.is_none() { return; }
             ui.add_enabled_ui(!self.busy, |ui| {
@@ -155,12 +154,11 @@ impl App {
                 }
             });
         });
-        if value != old {
-            if let Some(draft) = &mut self.system {
-                if let Err(e) = c.set(&self.schema, &mut draft.values, value) {
-                    self.log(e.to_string());
-                }
-            }
+        if value != old
+            && let Some(draft) = &mut self.system
+            && let Err(e) = c.set(&self.schema, &mut draft.values, value)
+        {
+            self.log(e.to_string());
         }
     }
 }

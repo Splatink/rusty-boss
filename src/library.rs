@@ -1,9 +1,9 @@
 //! Local collections are independent of exported TSLs and hardware permissions.
 use crate::{
-    document::{atomic_json, read_json, LiveSet, Patch},
+    document::{LiveSet, Patch, atomic_json, read_json},
     schema::Schema,
 };
-use anyhow::{ensure, Context, Result};
+use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::BTreeSet,

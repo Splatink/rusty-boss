@@ -1,5 +1,5 @@
 //! Wire framing inferred from the shipped 1.1.0 JavaScript. No hardware verification.
-use anyhow::{bail, ensure, Result};
+use anyhow::{Result, bail, ensure};
 use serde::{Deserialize, Serialize};
 
 pub const MODEL_ID: [u8; 3] = [1, 5, 7];
@@ -256,7 +256,9 @@ mod tests {
         };
         assert_eq!(
             msg.encode().unwrap(),
-            vec![0xf0, 0x41, 16, 1, 5, 7, 0x11, 0x20, 0, 0, 0, 0, 0, 0, 16, 0x50, 0xf7]
+            vec![
+                0xf0, 0x41, 16, 1, 5, 7, 0x11, 0x20, 0, 0, 0, 0, 0, 0, 16, 0x50, 0xf7
+            ]
         );
     }
     #[test]

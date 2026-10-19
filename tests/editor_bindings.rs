@@ -1,6 +1,6 @@
 use rusty_boss::{
     document::Patch,
-    editor::{bloom, gafc, solo_delay, Catalog},
+    editor::{Catalog, bloom, gafc, solo_delay},
     schema::Schema,
 };
 #[test]

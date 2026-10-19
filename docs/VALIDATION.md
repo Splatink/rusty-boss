@@ -1,8 +1,34 @@
 # Local validation results
 
-Validation was run in the supplied Linux workspace, with Rust 1.99.0, ALSA
-1.2.16.1 and the locked Cargo dependency set. This records testing of Rusty Boss,
-not execution/behavioral equivalence of the original application.
+The 1.0.0 migration was validated on 2026-10-19 in the supplied Linux workspace
+with Rust/Cargo **1.99.1**, edition **2024**, ALSA 1.2.16.1 and the updated locked
+dependency set. This records testing of Rusty Boss, not execution/behavioral
+equivalence of the original application. Hardware observations below are retained
+historical results; **no amplifier access was performed for this migration**.
+
+Migration/release checks:
+
+- `bash tools/check.sh`: passed all four test configurations (98 default, 64
+  headless, 83 GUI-only and 64 MIDI-only), formatting, all four Clippy configurations with
+  warnings denied, and the release build.
+- `cargo audit` 0.22.2: **0 known vulnerabilities, 0 warnings**, using RustSec
+  database commit `999ec89d5d3f10f20be14750ec8c2d8b44e0ac9b` (2026-10-17).
+- Release startup/exit: all four themes passed in isolated Xvfb with temporary
+  config/data directories, Wayland variables unset and no port enumeration or
+  connection. This tests the X11 backend; native Wayland and portal interaction
+  were not manually retested.
+- Release CLI: `--version` reports `rusty-boss 1.0.0`; constructed TSL `new` and
+  `inspect` passed; `request 20000000 16` printed the expected RQ1, never sent it.
+- `cargo update --dry-run --verbose`: no compatible updates remaining. Direct
+  crates were checked against live crates.io stable releases.
+- `cargo package --allow-dirty --locked --offline`: passed packaging and build
+  verification of the extracted source package. The file-list check includes the
+  lockfile, GPL text, third-party notices, dependency inventory and font notices,
+  with no private evidence, installers or personal presets. See
+  [RELEASE.md](RELEASE.md) for release gates.
+
+The table below also retains earlier validation coverage; historical hardware
+and screenshot entries are not claims that those checks were rerun for 1.0.0.
 
 | Check | Result |
 |---|---|
@@ -13,7 +39,7 @@ not execution/behavioral equivalence of the original application.
 | `cargo clippy --all-targets -- -D warnings` | Passed |
 | `cargo clippy --no-default-features --features gui --all-targets -- -D warnings` | Passed |
 | `cargo build --locked` | Passed |
-| `cargo build --release --locked` | Passed; native executable about 18 MiB (with native portal file chooser) |
+| `cargo build --release --locked` | Passed for 1.0.0 with native portal file chooser |
 | Debug GUI four-frame startup/exit smoke | Exit 0 |
 | Release GUI startup/exit smoke | Exit 0 for all four themes, isolated Xvfb and temporary appearance config, no port enumeration/connection; Puppet screenshot retained |
 | CLI `new` + `inspect` constructed Gen 3 TSL | Passed |

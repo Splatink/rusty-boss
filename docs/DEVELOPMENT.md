@@ -6,7 +6,7 @@ Rusty Boss is a native Rust/egui Linux editor for KATANA Gen 3. The user guide i
 
 ## Build
 
-Install Rust 1.89 or newer, a C toolchain, pkg-config, ALSA headers and a working X11 or Wayland
+Install Rust 1.99.1 or newer, a C toolchain, pkg-config, ALSA headers and a working X11 or Wayland
 desktop with OpenGL/EGL support. Typical distribution packages:
 
 - Fedora: `gcc gcc-c++ pkgconf-pkg-config alsa-lib-devel libxkbcommon-devel wayland-devel mesa-libEGL-devel`
@@ -49,6 +49,20 @@ env -u DISPLAY ./target/release/rusty-boss
 
 No original installer, vendor app, vendor JavaScript or vendor native bridge is
 needed to build or run Rusty Boss. The original graphics and fonts are not used.
+
+## Rust and dependency baseline
+
+The 1.0.0 baseline uses Rust edition 2024 and Rust/Cargo 1.99.1, the current
+stable release checked on 2026-10-19. `rust-version` is the supported minimum,
+not an upper limit; newer stable compilers are welcome. No exact toolchain is
+forced on contributors.
+
+Direct dependencies were checked against crates.io and updated to their latest
+stable releases. `Cargo.lock` records the complete resolved graph; build releases
+with `--locked`. Transitive versions follow upstream compatibility constraints;
+do not force incompatible versions with patches just to remove older numbers.
+When updating dependencies, rerun the feature-matrix checks and refresh the
+license inventory/notices. See [VALIDATION.md](VALIDATION.md) for release checks.
 
 ## Architecture
 

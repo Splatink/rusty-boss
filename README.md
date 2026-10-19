@@ -147,7 +147,7 @@ Choose a theme in **Settings → Appearance**. Your choice is remembered.
 
 ## Run on Linux
 
-From a source checkout, with Rust 1.89+, a C toolchain and ALSA development packages installed:
+From a source checkout, with Rust 1.99.1 or newer, a C toolchain and ALSA development packages installed:
 
 ```sh
 cargo build --release --locked
@@ -182,4 +182,5 @@ of the app's runtime.
 
 For contributors: [development](docs/DEVELOPMENT.md) · [supported features and gaps](docs/PARITY.md)
 · [technical investigation](docs/INVESTIGATION.md) · [preset workflow evidence](docs/PRESET-WORKFLOW.md)
+· [1.0.0 changes](CHANGELOG.md) · [release checklist](docs/RELEASE.md)
 · [notices](NOTICE.md) · [GPLv3 licensing review](docs/LICENSE-REVIEW.md).

@@ -1,6 +1,41 @@
 # GPLv3 licensing and redistribution review
 
-## Conclusion
+## 1.0.0 dependency update — 2026-10-19
+
+**The review below is a historical snapshot, not clearance of 1.0.0.** Its old
+versions, hashes, counts, missing-license-file observation and notice-collection
+gaps describe the original review, not the updated checkout. The root `LICENSE`
+now exists and Cargo points to it with `license-file`; the owner still needs to
+confirm the application license grant/variant and contribution rights.
+
+The current `licenses/dependencies.csv` replaces the old inventory; the historical
+inventory remains available in Git. The updated graph contains **349 locked
+registry packages**, **201 default Linux normal/build dependencies** and **204
+including dev dependencies**. All 349 archive hashes match the lockfile; extracted
+manifests and 564 notice-file candidates match their archives. Every registry
+package declares a license. Declared terms remain permissive alternatives or
+separately licensed fonts; `Apache-2.0 OR GPL-2.0-only` offers Apache-2.0, not a
+mandatory GPLv2-only obligation. This is not an exhaustive source-level audit.
+
+`../THIRD-PARTY-NOTICES.md` now collects default Linux dependency and font notices,
+including upstream texts absent from 11 archives. Six egui-family crates record
+VCS revision `7c0b40402271e8d40cda69f87cf3c2617c2e4382`, which GitHub could not
+resolve during collection. Their texts are explicitly sourced from the annotated
+0.37.0 release tag's commit `841a328ba2dd8f6996beb7189ebb7fc00e668a2a` instead;
+exact-revision verification remains open. The bundle is collected evidence, not
+proof that every embedded notice has been found. It includes the new egui-icons
+font notice as well as the previous font notices. Ship it with binaries.
+
+Current evidence SHA-256 values:
+
+- `Cargo.lock`: `ef43f62225eab8895e7a0359c1f79edfd8a5b75d5637b480f72c1820202c9f3d`
+- `licenses/dependencies.csv`: `d14899e26d830263b9bebc0b16269f99cf750e04733783c6fe4955d537719731`
+- `../THIRD-PARTY-NOTICES.md`: `74da48ccd48dd974ad6d40daee5a2dcd69611247ca422b28a163e2024ca1c67f`
+
+Vendor-data rights, owner licensing decisions and final artifact/source-availability
+review are still release requirements. See [RELEASE.md](RELEASE.md).
+
+## Historical conclusion
 
 **Conditional yes for the application code; not yet cleared for a public release.**
 No confirmed GPLv3 incompatibility was found in the reviewed Rust dependency

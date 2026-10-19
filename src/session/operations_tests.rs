@@ -126,11 +126,12 @@ fn system_changes_are_validated_checked_and_read_back() {
     let addr = schema.block("SYSTEM%USB_COM").unwrap().address + 2;
     s.transport.bytes.insert(addr, 65);
     assert!(s.apply_system(&schema, &before, &after).is_err());
-    assert!(s
-        .transport
-        .sent
-        .iter()
-        .all(|m| matches!(m, Message::Request { .. })));
+    assert!(
+        s.transport
+            .sent
+            .iter()
+            .all(|m| matches!(m, Message::Request { .. }))
+    );
     let mut s = session();
     after.get_mut("SYSTEM%USB_COM").unwrap()[2] = 127;
     assert!(s.apply_system(&schema, &before, &after).is_err());
@@ -143,17 +144,19 @@ fn bulk_save_preflights_every_tone_and_stops_on_failure() {
     let mut bad = patch.clone();
     bad.parameters.get_mut("PATCH%AMP").unwrap().clear();
     let mut s = session();
-    assert!(s
-        .store_patches(&schema, &[(1, patch.clone()), (2, bad)], |_, _| {})
-        .is_err());
+    assert!(
+        s.store_patches(&schema, &[(1, patch.clone()), (2, bad)], |_, _| {})
+            .is_err()
+    );
     assert!(s.transport.sent.is_empty());
-    assert!(s
-        .store_patches(
+    assert!(
+        s.store_patches(
             &schema,
             &[(1, patch.clone()), (1, patch.clone())],
             |_, _| {}
         )
-        .is_err());
+        .is_err()
+    );
     assert!(s.transport.sent.is_empty());
     let mut progress = vec![];
     s.store_patches(
@@ -165,9 +168,10 @@ fn bulk_save_preflights_every_tone_and_stops_on_failure() {
     assert_eq!(progress, [(1, 2), (2, 2)]);
     let mut s = session();
     s.transport.fail_at = Some(1);
-    assert!(s
-        .store_patches(&schema, &[(1, patch.clone()), (2, patch)], |_, _| {})
-        .is_err());
+    assert!(
+        s.store_patches(&schema, &[(1, patch.clone()), (2, patch)], |_, _| {})
+            .is_err()
+    );
     assert!(!s.transport.sent.iter().any(|m| matches!(m, Message::Data { address, .. } if *address == Address::packed(0x7f000104).unwrap())));
 }
 #[test]
@@ -219,11 +223,12 @@ fn restore_stages_exact_roots_then_waits_and_exports_once() {
     for slot in 0..9 {
         assert!(s.transport.sent.iter().any(|m| matches!(m, Message::Data { address, .. } if *address == slot_address(slot).unwrap())));
     }
-    assert!(!s
-        .transport
-        .sent
-        .iter()
-        .any(|m| matches!(m, Message::Data { address, .. } if address.linear() == 0)));
+    assert!(
+        !s.transport
+            .sent
+            .iter()
+            .any(|m| matches!(m, Message::Data { address, .. } if address.linear() == 0))
+    );
     assert_eq!(s.transport.bytes[&1], 2);
 }
 #[test]
@@ -236,9 +241,10 @@ fn restore_failures_never_retry_export_or_select_a_channel() {
             1 => s.transport.cancel_wait = true,
             _ => s.transport.drop_export_ack = true,
         }
-        assert!(s
-            .restore_backup(&schema, &backup(&schema), |_, _| {})
-            .is_err());
+        assert!(
+            s.restore_backup(&schema, &backup(&schema), |_, _| {})
+                .is_err()
+        );
         let exports = s.transport.sent.iter().filter(|m| matches!(m, Message::Data { address, .. } if *address == Address::packed(0x7f01010a).unwrap())).count();
         assert_eq!(exports, usize::from(failure == 2));
         assert!(!s.transport.sent.iter().any(|m| matches!(m, Message::Data { address, .. } if *address == Address::packed(0x7f000100).unwrap())));

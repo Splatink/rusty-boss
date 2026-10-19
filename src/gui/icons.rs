@@ -1,5 +1,5 @@
 use super::*;
-use anyhow::{ensure, Context, Result};
+use anyhow::{Context, Result, ensure};
 use std::io::Read;
 
 fn png(bytes: &[u8]) -> Result<egui::ColorImage> {
@@ -105,7 +105,7 @@ impl App {
                 .clicked()
             {
                 self.choose_file(FileAction::Icon(key.clone()));
-                ui.close_menu();
+                ui.close();
             }
             if ui.button("Use default").clicked() {
                 match self
@@ -121,7 +121,7 @@ impl App {
                     }
                     Err(e) => self.log(e.to_string()),
                 }
-                ui.close_menu();
+                ui.close();
             }
         });
     }
@@ -140,9 +140,10 @@ mod tests {
         let mut app = App::new(&ctx);
         app.library_path = Some(PathBuf::from("/tmp/rusty-boss-test/library.json"));
         assert!(app.icon_path("../escape").is_err());
-        assert!(app
-            .icon_path("modfx-23")
-            .unwrap()
-            .ends_with("icons/modfx-23.json"));
+        assert!(
+            app.icon_path("modfx-23")
+                .unwrap()
+                .ends_with("icons/modfx-23.json")
+        );
     }
 }

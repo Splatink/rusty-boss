@@ -23,6 +23,11 @@ and license are in `assets/fonts/OFL-RussoOne.txt` and embedded in the app's
 Settings → Help & connection log → Typeface license. See `assets/fonts/README.md`
 for the pinned source and file hash.
 
-Third-party Rust dependencies retain their own licenses, available via the locked
-crate metadata. A release/distribution pass should review those notices and any
-applicable interoperability and redistribution requirements.
+Third-party Rust dependencies retain their own licenses. The default Linux
+normal/build dependency and embedded-font notices are collected in
+`THIRD-PARTY-NOTICES.md`; ship that document and `LICENSE` with binary releases.
+The all-platform locked dependency inventory is in `docs/licenses/dependencies.csv`.
+The notice bundle identifies exact upstream sources and explicitly labels six
+egui release-tag fallbacks where published VCS revisions were unavailable.
+These collected notices do not resolve the vendor-derived data rights question
+or replace a release-specific legal/provenance review. See `docs/RELEASE.md`.

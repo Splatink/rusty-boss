@@ -3,8 +3,20 @@
 mod advanced;
 use super::*;
 
+pub(super) fn run_ui(
+    ctx: &egui::Context,
+    input: egui::RawInput,
+    ui: impl FnMut(&mut egui::Ui),
+) -> egui::FullOutput {
+    let mut output = ctx.run_ui(input, ui);
+    // Headless tests inspect shapes without uploading textures to a renderer.
+    output.textures_delta.clear();
+    output
+}
+
 fn render(app: &mut App, ctx: &egui::Context, width: f32, height: f32) -> egui::FullOutput {
-    ctx.run(
+    run_ui(
+        ctx,
         egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(
                 egui::Pos2::ZERO,
@@ -12,21 +24,21 @@ fn render(app: &mut App, ctx: &egui::Context, width: f32, height: f32) -> egui::
             )),
             ..Default::default()
         },
-        |ctx| {
-            app.header(ctx);
+        |ui| {
+            app.header(ui);
             if app.page != Page::Settings {
-                app.preset_sidebar(ctx);
+                app.preset_sidebar(ui);
             }
             match app.page {
-                Page::Editor => app.classic_editor(ctx),
+                Page::Editor => app.classic_editor(ui),
                 Page::Library => {
-                    egui::CentralPanel::default().show(ctx, |ui| app.library_page(ui));
+                    egui::CentralPanel::default().show(ui, |ui| app.library_page(ui));
                 }
                 Page::Settings => {
-                    egui::CentralPanel::default().show(ctx, |ui| app.connection(ui));
+                    egui::CentralPanel::default().show(ui, |ui| app.connection(ui));
                 }
             }
-            app.confirmation(ctx);
+            app.confirmation(ui.ctx());
         },
     )
 }
@@ -325,7 +337,8 @@ fn hardware_read_keeps_downloaded_patch_and_does_not_preview_or_commit() {
 
 #[cfg(feature = "midi")]
 fn pointer_frame(app: &mut App, ctx: &egui::Context, events: Vec<egui::Event>) -> egui::FullOutput {
-    ctx.run(
+    run_ui(
+        ctx,
         egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(
                 egui::Pos2::ZERO,
@@ -334,8 +347,8 @@ fn pointer_frame(app: &mut App, ctx: &egui::Context, events: Vec<egui::Event>) -
             events,
             ..Default::default()
         },
-        |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
+        |ui| {
+            egui::CentralPanel::default().show(ui, |ui| {
                 ui.set_max_width(250.);
                 app.tone_list(ui);
                 ui.separator();
@@ -461,7 +474,8 @@ fn large_liveset_keeps_tones_and_channel_drop_zone_visible_together() {
 #[test]
 fn overwrite_modal_no_escape_and_yes_buttons_are_wired_without_typed_input() {
     fn frame(app: &mut App, ctx: &egui::Context, events: Vec<egui::Event>) -> egui::FullOutput {
-        ctx.run(
+        run_ui(
+            ctx,
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,
@@ -470,9 +484,9 @@ fn overwrite_modal_no_escape_and_yes_buttons_are_wired_without_typed_input() {
                 events,
                 ..Default::default()
             },
-            |ctx| {
-                egui::CentralPanel::default().show(ctx, |_| {});
-                app.confirmation(ctx);
+            |ui| {
+                egui::CentralPanel::default().show(ui, |_| {});
+                app.confirmation(ui.ctx());
             },
         )
     }

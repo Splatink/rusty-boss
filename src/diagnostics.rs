@@ -6,7 +6,7 @@ use crate::{
     session::{Session, Transport},
 };
 use anyhow::Result;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::{
     cell::RefCell,
     rc::Rc,
@@ -107,7 +107,7 @@ pub fn reverb_snapshot<T: Transport>(transport: T, schema: &Schema) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::protocol::{Address, Message, IDENTITY_REQUEST};
+    use crate::protocol::{Address, IDENTITY_REQUEST, Message};
     use std::collections::VecDeque;
     struct Mock {
         replies: VecDeque<Vec<u8>>,

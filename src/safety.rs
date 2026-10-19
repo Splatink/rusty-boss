@@ -1,13 +1,13 @@
 //! A last-line, per-packet write gate. UI hiding alone is not preset protection.
 use crate::{
-    protocol::{Address, Message, IDENTITY_REQUEST},
+    protocol::{Address, IDENTITY_REQUEST, Message},
     session::Transport,
 };
-use anyhow::{ensure, Result};
+use anyhow::{Result, ensure};
 use std::{
     sync::{
-        atomic::{AtomicU8, Ordering},
         Arc,
+        atomic::{AtomicU8, Ordering},
     },
     time::Duration,
 };
@@ -65,8 +65,10 @@ impl WriteGate {
                     ..=Address::packed(0x7f010108)?.linear())
                     .contains(&address.linear())
                     && data == [0];
-                ensure!(active_patch || select || macro_knob || tap || access==Access::Persistent,
-                    "Preset protection: stored channels, system settings and export commands require persistent-write permission");
+                ensure!(
+                    active_patch || select || macro_knob || tap || access == Access::Persistent,
+                    "Preset protection: stored channels, system settings and export commands require persistent-write permission"
+                );
                 Ok(())
             }
         }
@@ -196,8 +198,8 @@ mod tests {
     fn readonly_allows_reads_and_session_mode_only() {
         let g = WriteGate::default();
         assert!(g.check(&IDENTITY_REQUEST).is_ok());
-        assert!(g
-            .check(
+        assert!(
+            g.check(
                 &Message::Request {
                     device: 16,
                     address: Address::packed(0x20100000).unwrap(),
@@ -206,7 +208,8 @@ mod tests {
                 .encode()
                 .unwrap()
             )
-            .is_ok());
+            .is_ok()
+        );
         for n in [0, 1] {
             assert!(g.check(&dt(0x7f000001, vec![n])).is_ok());
         }

@@ -6,7 +6,7 @@ use crate::{
     library::Library,
     protocol::Identity,
     safety::{Access, WriteGate},
-    schema::{slot_label, Schema},
+    schema::{Schema, slot_label},
 };
 use eframe::egui::{self, Color32, RichText};
 use std::{
@@ -33,9 +33,9 @@ mod wordmark;
 #[cfg(feature = "midi")]
 use std::{
     sync::{
+        Arc,
         atomic::{AtomicBool, Ordering},
         mpsc::{self, Receiver, Sender},
-        Arc,
     },
     thread,
     time::Duration,
@@ -59,15 +59,12 @@ struct PatchDrag(Patch);
 #[cfg(feature = "midi")]
 fn overlay_pending_edits(schema: &Schema, values: &mut ParamSet, edits: &VecDeque<Edit>) {
     for edit in edits {
-        if let (Ok(block), Some(data)) = (schema.block(&edit.block), values.get_mut(&edit.block)) {
-            if let Some(parameter) = block.parameters.get(edit.index) {
-                if data.len() >= parameter.offset + parameter.width
-                    && edit.bytes.len() == parameter.width
-                {
-                    data[parameter.offset..parameter.offset + parameter.width]
-                        .copy_from_slice(&edit.bytes);
-                }
-            }
+        if let (Ok(block), Some(data)) = (schema.block(&edit.block), values.get_mut(&edit.block))
+            && let Some(parameter) = block.parameters.get(edit.index)
+            && data.len() >= parameter.offset + parameter.width
+            && edit.bytes.len() == parameter.width
+        {
+            data[parameter.offset..parameter.offset + parameter.width].copy_from_slice(&edit.bytes);
         }
     }
 }
@@ -655,10 +652,10 @@ impl App {
             self.pending_edits.clear();
             return;
         }
-        if !self.busy {
-            if let Some(e) = self.pending_edits.pop_front() {
-                self.submit(Job::Set(self.generation, e.block, e.index, e.bytes));
-            }
+        if !self.busy
+            && let Some(e) = self.pending_edits.pop_front()
+        {
+            self.submit(Job::Set(self.generation, e.block, e.index, e.bytes));
         }
     }
     #[cfg(feature = "midi")]
@@ -836,36 +833,31 @@ impl App {
                     self.log("Amp channel changed · Click a tone to preview or copy the amp sound");
                     return;
                 }
-                if self.synced {
-                    if let Some(patch) = self.library.data[0].get_mut(self.selected) {
-                        let address = address.linear() as usize;
-                        for block in self
-                            .schema
-                            .blocks
-                            .iter()
-                            .filter(|b| b.id.starts_with("PATCH%"))
+                if self.synced
+                    && let Some(patch) = self.library.data[0].get_mut(self.selected)
+                {
+                    let address = address.linear() as usize;
+                    for block in self
+                        .schema
+                        .blocks
+                        .iter()
+                        .filter(|b| b.id.starts_with("PATCH%"))
+                    {
+                        let base = block.address as usize;
+                        let start = address.max(base);
+                        let end = (address + data.len()).min(base + block.size);
+                        if start < end
+                            && let Some(dst) = patch
+                                .parameters
+                                .get_mut(&block.id)
+                                .filter(|d| d.len() >= end - base)
                         {
-                            let base = block.address as usize;
-                            let start = address.max(base);
-                            let end = (address + data.len()).min(base + block.size);
-                            if start < end {
-                                if let Some(dst) = patch
-                                    .parameters
-                                    .get_mut(&block.id)
-                                    .filter(|d| d.len() >= end - base)
-                                {
-                                    dst[start - base..end - base]
-                                        .copy_from_slice(&data[start - address..end - address]);
-                                    self.dirty = true;
-                                }
-                            }
+                            dst[start - base..end - base]
+                                .copy_from_slice(&data[start - address..end - address]);
+                            self.dirty = true;
                         }
-                        overlay_pending_edits(
-                            &self.schema,
-                            &mut patch.parameters,
-                            &self.pending_edits,
-                        );
                     }
+                    overlay_pending_edits(&self.schema, &mut patch.parameters, &self.pending_edits);
                 }
             }
             Event::Update(_) => {}
@@ -892,14 +884,14 @@ impl App {
             } else if ui.button("Enable amp writes…").clicked() { self.confirm = Some("unlock".into()); }
         });
     }
-    fn header(&mut self, ctx: &egui::Context) {
-        egui::TopBottomPanel::top("header")
+    fn header(&mut self, ui: &mut egui::Ui) {
+        egui::Panel::top("header")
             .frame(
                 egui::Frame::new()
-                    .fill(ctx.style().visuals.window_fill)
+                    .fill(ui.visuals().window_fill)
                     .inner_margin(egui::Margin::symmetric(18, 10)),
             )
-            .show(ctx, |ui| {
+            .show(ui, |ui| {
                 ui.horizontal(|ui| {
                     wordmark::show(ui, self.theme.accent());
                     ui.label(RichText::new("KATANA / LINUX").size(11.).weak());
@@ -933,7 +925,7 @@ impl App {
                     self.permissions(ui);
                 });
             });
-        egui::TopBottomPanel::bottom("status").show(ctx, |ui| {
+        egui::Panel::bottom("status").show(ui, |ui| {
             ui.horizontal_wrapped(|ui| {
                 if self.busy {
                     ui.spinner();
@@ -962,7 +954,7 @@ impl App {
                 next = Some(i);
             }
             if r.dragged() {
-                egui::show_tooltip_at_pointer(ui.ctx(), ui.layer_id(), r.id.with("drag"), |ui| {
+                egui::Tooltip::for_widget(&r).at_pointer().show(|ui| {
                     ui.label(p.name());
                 });
             }
@@ -1031,13 +1023,13 @@ impl App {
             });
         }
     }
-    fn preset_sidebar(&mut self, ctx: &egui::Context) {
-        egui::SidePanel::left("presets")
-            .default_width(235.)
-            .min_width(190.)
-            .max_width(310.)
+    fn preset_sidebar(&mut self, ui: &mut egui::Ui) {
+        egui::Panel::left("presets")
+            .default_size(235.)
+            .min_size(190.)
+            .max_size(310.)
             .resizable(true)
-            .show(ctx, |ui| {
+            .show(ui, |ui| {
                 ui.label(
                     RichText::new("MY TONES")
                         .size(11.)
@@ -1236,10 +1228,10 @@ impl App {
                 {
                     self.theme = theme;
                     theme.apply(ui.ctx());
-                    if let Some(p) = Theme::preferences_path() {
-                        if let Err(e) = theme.save(&p) {
-                            self.log(format!("Could not remember theme: {e}"));
-                        }
+                    if let Some(p) = Theme::preferences_path()
+                        && let Err(e) = theme.save(&p)
+                    {
+                        self.log(format!("Could not remember theme: {e}"));
                     }
                 }
             }
@@ -1264,7 +1256,7 @@ impl App {
                 });
         });
         egui::CollapsingHeader::new("Help & connection log").show(ui, |ui| {
-            ui.label("Rusty Boss · A BOSS KATANA editor for Linux. Currently supports Gen 3.");
+            ui.label(concat!("Rusty Boss ", env!("CARGO_PKG_VERSION"), " · A BOSS KATANA editor for Linux. Currently supports Gen 3."));
             ui.label("Experimental hardware support: keep a known-good backup before saving channels, applying settings or restoring a backup.");
             ui.label("Independent software. Not affiliated with Roland/BOSS.");
             egui::CollapsingHeader::new("Typeface license").show(ui, |ui| {
@@ -1386,7 +1378,7 @@ impl App {
         };
         let mut yes = false;
         let mut no = false;
-        let modal = egui::Modal::new(egui::Id::new("confirm-operation")).show(ctx, |ui| {
+        let modal = egui::Modal::new(egui::Id::unique("confirm-operation")).show(ctx, |ui| {
             ui.set_max_width(460.);
             if action == "import-path" || action == "save-path" {
                 ui.heading(if action == "import-path" { "Import TSL" } else { "Save TSL file" });
@@ -1540,37 +1532,39 @@ impl App {
     }
 }
 impl eframe::App for App {
-    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        let ctx = &ui.ctx().clone();
         #[cfg(feature = "midi")]
         self.events();
         self.poll_file_dialog();
-        if !self.busy && self.confirm.is_none() {
-            if let Some(path) = ctx.input(|i| {
+        if !self.busy
+            && self.confirm.is_none()
+            && let Some(path) = ctx.input(|i| {
                 i.raw
                     .dropped_files
                     .iter()
-                    .filter_map(|f| f.path.clone())
+                    .map(|f| f.path().to_path_buf())
                     .find(|p| p.extension().is_some_and(|e| e.eq_ignore_ascii_case("tsl")))
-            }) {
-                self.file = path.to_string_lossy().into_owned();
-                self.import_file();
-            }
+            })
+        {
+            self.file = path.to_string_lossy().into_owned();
+            self.import_file();
         }
-        self.header(ctx);
+        self.header(ui);
         if self.page != Page::Settings {
-            self.preset_sidebar(ctx);
+            self.preset_sidebar(ui);
         }
         match self.page {
-            Page::Editor => self.classic_editor(ctx),
+            Page::Editor => self.classic_editor(ui),
             Page::Library => {
-                egui::CentralPanel::default().show(ctx, |ui| {
+                egui::CentralPanel::default().show(ui, |ui| {
                     egui::ScrollArea::vertical().show(ui, |ui| {
                         ui.add_enabled_ui(!self.busy, |ui| self.library_page(ui));
                     });
                 });
             }
             Page::Settings => {
-                egui::CentralPanel::default().show(ctx, |ui| {
+                egui::CentralPanel::default().show(ui, |ui| {
                     egui::ScrollArea::vertical().show(ui, |ui| self.connection(ui));
                 });
             }
@@ -1607,7 +1601,7 @@ impl eframe::App for App {
             self.close_dialog = true;
         }
         if self.close_dialog {
-            egui::Modal::new(egui::Id::new("unsaved-close")).show(ctx, |ui| {
+            egui::Modal::new(egui::Id::unique("unsaved-close")).show(ctx, |ui| {
                 ui.heading("Unsaved tones");
                 ui.label("Local autosave has not succeeded. Export the collections you need before closing.");
                 if ui.button("Export TSL…").clicked() {

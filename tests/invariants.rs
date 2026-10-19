@@ -1,7 +1,7 @@
 use rusty_boss::{
     document::{Backup, LiveSet, Patch},
     protocol::{Address, Decoder, Identity, Message},
-    schema::{slot_address, Schema},
+    schema::{Schema, slot_address},
 };
 use std::{fs, path::PathBuf};
 #[test]
@@ -114,25 +114,31 @@ fn rejects_wrong_product_revision_and_oversized_input() {
 }
 #[test]
 fn no_raw_write_can_cross_address_space() {
-    assert!(Message::Data {
-        device: 16,
-        address: Address::packed(0x7f7f7f7f).unwrap(),
-        data: vec![1, 2]
-    }
-    .encode()
-    .is_err());
-    assert!(Message::Data {
-        device: 128,
-        address: Address::new(0).unwrap(),
-        data: vec![1]
-    }
-    .encode()
-    .is_err());
-    assert!(Message::Data {
-        device: 16,
-        address: Address::new(0).unwrap(),
-        data: vec![128]
-    }
-    .encode()
-    .is_err());
+    assert!(
+        Message::Data {
+            device: 16,
+            address: Address::packed(0x7f7f7f7f).unwrap(),
+            data: vec![1, 2]
+        }
+        .encode()
+        .is_err()
+    );
+    assert!(
+        Message::Data {
+            device: 128,
+            address: Address::new(0).unwrap(),
+            data: vec![1]
+        }
+        .encode()
+        .is_err()
+    );
+    assert!(
+        Message::Data {
+            device: 16,
+            address: Address::new(0).unwrap(),
+            data: vec![128]
+        }
+        .encode()
+        .is_err()
+    );
 }

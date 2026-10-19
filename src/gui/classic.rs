@@ -2,7 +2,7 @@
 use super::*;
 use crate::editor::{self, Control, Edit, Section};
 use crate::safety::Access;
-use egui::{vec2, Sense, Stroke};
+use egui::{Sense, Stroke, vec2};
 mod assignments;
 #[cfg(test)]
 mod chain_tests;
@@ -190,7 +190,7 @@ fn rotary(
             finished |= r.drag_stopped() || r.lost_focus() || (r.changed() && !r.dragged());
         }
     });
-    let gesture = ui.id().with("rotary-edited");
+    let gesture = ui.scope_id().with("rotary-edited");
     let edited = changed || ui.data(|d| d.get_temp::<bool>(gesture).unwrap_or(false));
     ui.data_mut(|d| d.insert_temp(gesture, edited && !finished));
     (value, changed, finished && edited)
@@ -301,12 +301,13 @@ impl App {
                 }
             }
         }
-        if finished && self.live && enabled {
-            if let Some(p) = self.library.data[0].get_mut(self.selected) {
-                if let Ok(edit) = c.set(&self.schema, &mut p.parameters, new) {
-                    self.record_edit(edit);
-                }
-            }
+        if finished
+            && self.live
+            && enabled
+            && let Some(p) = self.library.data[0].get_mut(self.selected)
+            && let Ok(edit) = c.set(&self.schema, &mut p.parameters, new)
+        {
+            self.record_edit(edit);
         }
     }
     fn dropdown(&mut self, ui: &mut egui::Ui, c: Control) {
@@ -484,10 +485,9 @@ impl App {
                     .add_enabled(!self.blocking_operation(), button)
                     .on_hover_text(format!("{label} algorithm bank"))
                     .clicked()
+                    && let Some(c) = self.simple("PATCH%COLOR", index, "COLOR BANK")
                 {
-                    if let Some(c) = self.simple("PATCH%COLOR", index, "COLOR BANK") {
-                        self.set_control(&c, i as i32);
-                    }
+                    self.set_control(&c, i as i32);
                 }
             }
         }
@@ -527,15 +527,14 @@ impl App {
                         c.label = format!("EQ · {}", c.label);
                     }
                 }
-                if section == Section::Contour {
-                    if let Some(color) =
+                if section == Section::Contour
+                    && let Some(color) =
                         c.id.rsplit('-')
                             .next()
                             .and_then(|s| s.parse::<usize>().ok())
                             .filter(|i| (1..=3).contains(i))
-                    {
-                        c.label = format!("CONTOUR {color} · {}", c.label);
-                    }
+                {
+                    c.label = format!("CONTOUR {color} · {}", c.label);
                 }
                 self.remap_controls(section, c)
             })
@@ -560,7 +559,7 @@ impl App {
             && self.pending_edits.is_empty()
             && self.connected.is_some()
             && self.write_gate.access() != Access::ReadOnly;
-        let id = ui.id().with(("panel-macro", index, self.generation));
+        let id = ui.scope_id().with(("panel-macro", index, self.generation));
         let value = ui.data(|d| d.get_temp::<i32>(id)).unwrap_or(snapshot);
         let c = Control {
             id: format!("panel-macro-{index}"),
@@ -727,32 +726,31 @@ impl App {
                                 for target in &chain {
                                     if let Ok(route) =
                                         self.catalog.move_in_chain(&chain, id, target)
+                                        && ui.button(target.to_uppercase()).clicked()
                                     {
-                                        if ui.button(target.to_uppercase()).clicked() {
-                                            movement = Some(route);
-                                            ui.close_menu();
-                                        }
+                                        movement = Some(route);
+                                        ui.close();
                                     }
                                 }
                             });
                         }
-                        if let Some(source) = r.dnd_hover_payload::<ChainDrag>() {
-                            if let Ok(route) = self.catalog.move_in_chain(&chain, &source.0, id) {
-                                ui.painter().rect_stroke(
-                                    r.rect,
-                                    4.,
-                                    Stroke::new(2_f32, self.theme.accent()),
-                                    egui::StrokeKind::Outside,
-                                );
-                                if enabled && r.dnd_release_payload::<ChainDrag>().is_some() {
-                                    movement = Some(route);
-                                }
+                        if let Some(source) = r.dnd_hover_payload::<ChainDrag>()
+                            && let Ok(route) = self.catalog.move_in_chain(&chain, &source.0, id)
+                        {
+                            ui.painter().rect_stroke(
+                                r.rect,
+                                4.,
+                                Stroke::new(2_f32, self.theme.accent()),
+                                egui::StrokeKind::Outside,
+                            );
+                            if enabled && r.dnd_release_payload::<ChainDrag>().is_some() {
+                                movement = Some(route);
                             }
                         }
-                        if r.clicked() {
-                            if let Some(s) = section {
-                                self.section = s;
-                            }
+                        if r.clicked()
+                            && let Some(s) = section
+                        {
+                            self.section = s;
                         }
                     }
                 });
@@ -768,10 +766,10 @@ impl App {
             .into_iter()
             .zip(route)
             {
-                if self.number(block, offset) != value {
-                    if let Some(c) = self.simple(block, offset, "Routing") {
-                        self.set_control(&c, value);
-                    }
+                if self.number(block, offset) != value
+                    && let Some(c) = self.simple(block, offset, "Routing")
+                {
+                    self.set_control(&c, value);
                 }
             }
         }
@@ -782,12 +780,12 @@ impl App {
             ui.heading(section.label());
             self.effect_switch(ui, section);
             self.colors(ui, section);
-            if let Some(id) = self.selector(section) {
-                if let Some(mut c) = self.catalog.control(id) {
-                    c = self.remap_controls(section, c);
-                    c.label = "TYPE".into();
-                    self.dropdown(ui, c);
-                }
+            if let Some(id) = self.selector(section)
+                && let Some(mut c) = self.catalog.control(id)
+            {
+                c = self.remap_controls(section, c);
+                c.label = "TYPE".into();
+                self.dropdown(ui, c);
             }
         });
         ui.add_space(10.);
@@ -811,14 +809,14 @@ impl App {
                 _ => 2,
             }));
         }
-        if matches!(section, Section::Reverb | Section::Delay2) {
-            if let Some(mut c) = self.catalog.control(&format!(
+        if matches!(section, Section::Reverb | Section::Delay2)
+            && let Some(mut c) = self.catalog.control(&format!(
                 "reverb-layer-mode-{}-select-box",
                 ["grn", "red", "ylw"][self.color(section)]
-            )) {
-                c.label = "Delay 2 / Reverb layer".into();
-                self.dropdown(ui, c);
-            }
+            ))
+        {
+            c.label = "Delay 2 / Reverb layer".into();
+            self.dropdown(ui, c);
         }
         if section == Section::Solo && editor::solo_delay(self.model_code()) {
             self.panel_snapshot(ui, section);
@@ -902,8 +900,8 @@ impl App {
     pub(super) fn blocking_operation(&self) -> bool {
         self.busy && !self.write_busy
     }
-    pub(super) fn classic_editor(&mut self, ctx: &egui::Context) {
-        egui::CentralPanel::default().frame(egui::Frame::new().inner_margin(18).fill(ctx.style().visuals.panel_fill)).show(ctx, |ui| {
+    pub(super) fn classic_editor(&mut self, ui: &mut egui::Ui) {
+        egui::CentralPanel::default().frame(egui::Frame::new().inner_margin(18).fill(ui.visuals().panel_fill)).show(ui, |ui| {
             if self.library.data[0].is_empty() {
                 ui.heading("Your next sound starts here");
                 ui.label("Import a Gen 3 TSL using the button on the left, or create a tone in Library.");

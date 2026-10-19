@@ -40,8 +40,8 @@ fn settings_and_controllers_render_without_implicit_changes() {
         app.offline_model = model;
         for page in 0..5 {
             app.system_page = page;
-            let _ = ctx.run(egui::RawInput::default(), |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| match page {
+            let _ = crate::gui::tests::run_ui(&ctx, egui::RawInput::default(), |ui| {
+                egui::CentralPanel::default().show(ui, |ui| match page {
                     0 => app.global_eq_settings(ui),
                     1 => app.system_group(ui, "system-line-out-setting-page", 1),
                     2 => app.system_group(ui, "system-usb-setting-page", 1),
@@ -221,9 +221,11 @@ fn multi_block_notifications_preserve_pending_edits_and_channel_changes_disarm()
             .unwrap(),
         78
     );
-    assert!(app.library.data[0][0].parameters["PATCH%SW"]
-        .iter()
-        .all(|v| *v == 0));
+    assert!(
+        app.library.data[0][0].parameters["PATCH%SW"]
+            .iter()
+            .all(|v| *v == 0)
+    );
     assert_eq!(app.library.data[0][0].parameters["PATCH%AMP"][3], 0);
     app.handle_event(Event::Update(Message::Data {
         device: 0x10,

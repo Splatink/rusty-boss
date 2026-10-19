@@ -1,6 +1,6 @@
 //! Gen 3 TSL/ALB interchange. Unknown JSON fields and raw bytes survive round trips.
 use crate::schema::Schema;
-use anyhow::{ensure, Context, Result};
+use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{

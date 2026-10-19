@@ -77,7 +77,7 @@ impl Theme {
             ),
         };
         let rgb = |(r, g, b)| Color32::from_rgb(r, g, b);
-        let mut style = (*ctx.style()).clone();
+        let mut style = (*ctx.global_style()).clone();
         let mut v = if light {
             egui::Visuals::light()
         } else {
@@ -136,7 +136,7 @@ impl Theme {
         style
             .text_styles
             .insert(egui::TextStyle::Heading, egui::FontId::proportional(23.));
-        ctx.set_style(style);
+        ctx.set_global_style(style);
     }
     pub fn preferences_path() -> Option<PathBuf> {
         std::env::var_os("XDG_CONFIG_HOME")
@@ -166,12 +166,15 @@ mod tests {
         let ctx = egui::Context::default();
         for theme in Theme::ALL {
             theme.apply(&ctx);
-            assert_eq!(ctx.style().visuals.dark_mode, theme != Theme::Justice);
             assert_eq!(
-                ctx.style().visuals.selection.stroke.color,
+                ctx.global_style().visuals.dark_mode,
+                theme != Theme::Justice
+            );
+            assert_eq!(
+                ctx.global_style().visuals.selection.stroke.color,
                 theme.selection_accent()
             );
-            let v = &ctx.style().visuals;
+            let v = &ctx.global_style().visuals;
             let luminance = |c: Color32| (c.r() as i32 + c.g() as i32 + c.b() as i32) / 3;
             assert!((luminance(v.text_color()) - luminance(v.panel_fill)).abs() > 130);
         }
@@ -180,7 +183,7 @@ mod tests {
     fn palettes_follow_the_requested_green_blue_purple_and_copper_directions() {
         let ctx = egui::Context::default();
         Theme::Lightning.apply(&ctx);
-        let v = ctx.style().visuals.clone();
+        let v = ctx.global_style().visuals.clone();
         let blue = Theme::Lightning.accent();
         let purple = v.selection.stroke.color;
         assert!(blue.b() > blue.g() && blue.g() > blue.r());
@@ -191,7 +194,7 @@ mod tests {
 
         // Switching to Justice must not retain Lightning's purple interaction colours.
         Theme::Justice.apply(&ctx);
-        let v = ctx.style().visuals.clone();
+        let v = ctx.global_style().visuals.clone();
         assert!(!v.dark_mode);
         assert!(v.window_fill.r() >= 250 && v.window_fill.g() >= 250 && v.window_fill.b() >= 250);
         for fill in [
@@ -211,7 +214,7 @@ mod tests {
         }
 
         Theme::Puppet.apply(&ctx);
-        let v = ctx.style().visuals.clone();
+        let v = ctx.global_style().visuals.clone();
         for surface in [
             v.panel_fill,
             v.window_fill,
@@ -248,7 +251,7 @@ mod tests {
         let ctx = egui::Context::default();
         for theme in Theme::ALL {
             theme.apply(&ctx);
-            let v = ctx.style().visuals.clone();
+            let v = ctx.global_style().visuals.clone();
             for bg in [
                 v.panel_fill,
                 v.window_fill,

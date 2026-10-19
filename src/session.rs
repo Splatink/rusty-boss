@@ -1,10 +1,10 @@
 //! Request/response state machine; isolated from ALSA so it can be tested offline.
 use crate::{
-    document::{Backup, BackupPatch, ParamSet, Patch, DEVICE},
+    document::{Backup, BackupPatch, DEVICE, ParamSet, Patch},
     protocol::*,
-    schema::{slot_address, Block, Schema},
+    schema::{Block, Schema, slot_address},
 };
-use anyhow::{bail, ensure, Context, Result};
+use anyhow::{Context, Result, bail, ensure};
 use std::{
     collections::{BTreeMap, VecDeque},
     time::{Duration, Instant},
@@ -74,10 +74,10 @@ impl<T: Transport> Session<T> {
                 Instant::now() < deadline,
                 "Katana identity request timed out"
             );
-            if let Some(bytes) = transport.receive(Duration::from_millis(20))? {
-                if let Ok(id) = Identity::decode(&bytes) {
-                    break id;
-                }
+            if let Some(bytes) = transport.receive(Duration::from_millis(20))?
+                && let Ok(id) = Identity::decode(&bytes)
+            {
+                break id;
             }
         };
         Ok(Self {
@@ -121,27 +121,25 @@ impl<T: Transport> Session<T> {
         )?;
         let deadline = Instant::now() + self.timeout;
         while Instant::now() < deadline {
-            if let Some(frame) = self.transport.receive(Duration::from_millis(10))? {
-                if let Ok(m @ Message::Data { .. }) = Message::decode(&frame) {
-                    if let Message::Data {
-                        device,
-                        address: a,
-                        ref data,
-                    } = m
-                    {
-                        if device != self.identity.device && device != 127 {
-                            continue;
-                        }
-                        let overlaps = a.linear() < address.linear() + size as u32
-                            && a.linear() as u64 + data.len() as u64 > address.linear() as u64;
-                        if overlaps {
-                            if read.accept(a, data)? {
-                                return Ok(read.bytes);
-                            }
-                        } else {
-                            self.retain_update(m)?;
-                        }
+            if let Some(frame) = self.transport.receive(Duration::from_millis(10))?
+                && let Ok(m @ Message::Data { .. }) = Message::decode(&frame)
+                && let Message::Data {
+                    device,
+                    address: a,
+                    ref data,
+                } = m
+            {
+                if device != self.identity.device && device != 127 {
+                    continue;
+                }
+                let overlaps = a.linear() < address.linear() + size as u32
+                    && a.linear() as u64 + data.len() as u64 > address.linear() as u64;
+                if overlaps {
+                    if read.accept(a, data)? {
+                        return Ok(read.bytes);
                     }
+                } else {
+                    self.retain_update(m)?;
                 }
             }
         }
@@ -493,24 +491,24 @@ impl<T: Transport> Session<T> {
         self.dt1(address, data)?;
         let deadline = Instant::now() + self.timeout;
         while Instant::now() < deadline {
-            if let Some(f) = self.transport.receive(Duration::from_millis(10))? {
-                if let Ok(m @ Message::Data { .. }) = Message::decode(&f) {
-                    if let Message::Data {
-                        device, address: a, ..
-                    } = m
-                    {
-                        if device != self.identity.device && device != 127 {
-                            continue;
-                        }
-                        if address == a {
-                            return Ok(());
-                        }
-                        self.retain_update(m)?;
-                    }
+            if let Some(f) = self.transport.receive(Duration::from_millis(10))?
+                && let Ok(m @ Message::Data { .. }) = Message::decode(&f)
+                && let Message::Data {
+                    device, address: a, ..
+                } = m
+            {
+                if device != self.identity.device && device != 127 {
+                    continue;
                 }
+                if address == a {
+                    return Ok(());
+                }
+                self.retain_update(m)?;
             }
         }
-        bail!("command at {address} not acknowledged; hardware state is UNKNOWN, do not retry blindly")
+        bail!(
+            "command at {address} not acknowledged; hardware state is UNKNOWN, do not retry blindly"
+        )
     }
     /// Commit the CURRENT hardware edit buffer. Caller must separately preview
     /// local changes first and explicitly confirm the destructive destination.
@@ -544,12 +542,11 @@ impl<T: Transport> Session<T> {
         if let Some(m) = self.updates.pop_front() {
             return Ok(Some(m));
         }
-        if let Some(frame) = self.transport.receive(Duration::from_millis(1))? {
-            if let Ok(m @ Message::Data { device, .. }) = Message::decode(&frame) {
-                if device == self.identity.device || device == 127 {
-                    return Ok(Some(m));
-                }
-            }
+        if let Some(frame) = self.transport.receive(Duration::from_millis(1))?
+            && let Ok(m @ Message::Data { device, .. }) = Message::decode(&frame)
+            && (device == self.identity.device || device == 127)
+        {
+            return Ok(Some(m));
         }
         Ok(None)
     }
@@ -660,9 +657,10 @@ mod tests {
         let mut s = offline_session(VecDeque::new());
         assert!(s.preview(&schema, &p).is_err());
         assert!(s.transport.sent.is_empty());
-        assert!(s
-            .set_parameter(&schema, "COMMAND%COMMAND_COM", 0, vec![1])
-            .is_err());
+        assert!(
+            s.set_parameter(&schema, "COMMAND%COMMAND_COM", 0, vec![1])
+                .is_err()
+        );
         assert!(s.commit(10).is_err());
         assert!(s.commit(9).is_err());
         assert!(s.transport.sent.is_empty());
@@ -697,11 +695,12 @@ mod tests {
             }
         }
         assert_eq!(s.transport.sent.len(), 4);
-        assert!(s
-            .transport
-            .sent
-            .iter()
-            .all(|f| matches!(Message::decode(f), Ok(Message::Request { .. }))));
+        assert!(
+            s.transport
+                .sent
+                .iter()
+                .all(|f| matches!(Message::decode(f), Ok(Message::Request { .. })))
+        );
     }
     #[test]
     fn failed_preview_during_store_never_reaches_commit() {
@@ -735,9 +734,10 @@ mod tests {
             active: false,
             updates: VecDeque::new(),
         };
-        assert!(s
-            .store_patch(&schema, &Patch::new(&schema).unwrap(), 1)
-            .is_err());
+        assert!(
+            s.store_patch(&schema, &Patch::new(&schema).unwrap(), 1)
+                .is_err()
+        );
         assert_eq!(s.transport.calls, 2);
         assert!(s.transport.sent.iter().all(|f| matches!(Message::decode(f), Ok(Message::Data {address,..}) if address.linear() < Address::packed(0x20100000).unwrap().linear())));
     }
