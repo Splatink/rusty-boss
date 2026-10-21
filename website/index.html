@@ -1,0 +1,277 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="puppet">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Rusty Boss — Your Katana. Your tones. On Linux.</title>
+  <meta name="description" content="Rusty Boss is a Linux editor for BOSS KATANA Gen 3 amplifiers: audition tones, shape your sound, and save favorites straight to the amp — no Wine or Windows.">
+  <link rel="stylesheet" href="css/style.css">
+  <noscript>
+    <style>[data-reveal],[data-step]{opacity:1;transform:none}</style>
+  </noscript>
+</head>
+<body>
+  <!-- ===== Nav ===== -->
+  <header class="nav" id="top">
+    <div class="nav-inner">
+      <a class="wordmark-sm" href="#top" aria-label="Rusty Boss home">
+        <span class="wm-a">RUSTY</span><span class="wm-b">BOSS</span>
+      </a>
+      <nav aria-label="Main">
+        <a href="#modes">Modes</a>
+        <a href="#workflow">Workflow</a>
+        <a href="#editor">Editor</a>
+        <a href="#library">Library</a>
+        <a href="#themes">Themes</a>
+        <a href="#build">Build</a>
+      </nav>
+      <div class="theme-switch" role="group" aria-label="Theme">
+        <button class="ts" data-theme="puppet" aria-label="Puppet theme" title="Puppet"><span class="swatch-row" aria-hidden="true">
+          <i style="background:#1a1513"></i><i style="background:#271f1b"></i><i style="background:#3a2d24"></i><i style="background:#554233"></i><i style="background:#f4a65e"></i>
+        </span></button>
+        <button class="ts" data-theme="justice" aria-label="Justice theme" title="Justice"><span class="swatch-row" aria-hidden="true">
+          <i style="background:#f4f8f2"></i><i style="background:#fefffc"></i><i style="background:#e3ede2"></i><i style="background:#bacebb"></i><i style="background:#2b6544"></i>
+        </span></button>
+        <button class="ts" data-theme="kill" aria-label="Kill theme" title="Kill"><span class="swatch-row" aria-hidden="true">
+          <i style="background:#180f14"></i><i style="background:#23171d"></i><i style="background:#362029"></i><i style="background:#512f3b"></i><i style="background:#f54f5b"></i>
+        </span></button>
+        <button class="ts" data-theme="lightning" aria-label="Lightning theme" title="Lightning"><span class="swatch-row" aria-hidden="true">
+          <i style="background:#111321"></i><i style="background:#1b273a"></i><i style="background:#2c3b52"></i><i style="background:#4c5e7c"></i><i style="background:#89b7ea"></i><i style="background:#b995f0"></i>
+        </span></button>
+      </div>
+    </div>
+  </header>
+
+  <!-- ===== Hero ===== -->
+  <section class="hero" aria-label="Intro">
+    <div class="hero-inner">
+      <h1 class="wordmark" id="wordmark" aria-label="Rusty Boss">
+        <span class="wm-a ch" style="--i:0">R</span><span class="wm-a ch" style="--i:1">U</span><span class="wm-a ch" style="--i:2">S</span><span class="wm-a ch" style="--i:3">T</span><span class="wm-a ch" style="--i:4">Y</span><span class="wm-a sp" style="--i:5">&nbsp;</span><span class="wm-b ch" style="--i:6">B</span><span class="wm-b ch" style="--i:7">O</span><span class="wm-b ch" style="--i:8">S</span><span class="wm-b ch" style="--i:9">S</span>
+      </h1>
+      <p class="tagline">Your Katana. Your tones. On Linux.</p>
+      <p class="tagline-sub">A focused Linux editor for <strong>BOSS KATANA Gen 3</strong> amplifiers — audition tones, shape your sound, and save favorites straight to the amp. No Wine, no Windows.</p>
+      <div class="hero-badges">
+        <span class="pill">KATANA Gen 3</span>
+        <span class="pill">Rust · eframe</span>
+        <span class="pill">Wayland + X11</span>
+        <span class="pill">GPLv3</span>
+        <span class="pill ver">v1.0.0</span>
+      </div>
+      <div class="scope-wrap">
+        <canvas id="scope" width="880" height="240" aria-label="Animated test-tone oscilloscope"></canvas>
+        <div class="scope-knob">
+          <div class="knob" tabindex="0" role="slider" aria-label="Test level" data-knob aria-valuenow="62" aria-valuemin="0" aria-valuemax="100">
+            <div class="knob-cap"></div>
+            <div class="knob-ring"></div>
+          </div>
+          <div class="knob-read"><span class="knob-name">Test level</span><span class="knob-val" id="scope-knob-val">62</span></div>
+        </div>
+      </div>
+      <div class="hero-cta">
+        <a class="btn" href="#workflow">How it works</a>
+        <a class="btn ghost" href="#build">Build from source</a>
+      </div>
+    </div>
+    <div class="ribbon" role="note">
+      <span class="ribbon-mark" aria-hidden="true">⚠</span>
+      <p>AI-generated and experimental. Bugs could change your amp's sound or overwrite saved tones. <strong>Make a known-good backup with BOSS Tone Studio before use.</strong></p>
+    </div>
+  </section>
+
+  <!-- ===== Protection modes ===== -->
+  <section class="panel" id="modes" data-reveal>
+    <h2>Protection that stays visible</h2>
+    <p class="lede">The controls at the top tell you what the app is allowed to change. The app <em>starts in Read-only every time</em> and never remembers permission to write.</p>
+    <div class="mode-row" role="group" aria-label="Mode selector">
+      <button class="mode-card" data-mode="readonly" aria-pressed="true">
+        <span class="mode-icon" aria-hidden="true">🔒</span>
+        <h3>Read-only</h3>
+        <p>Browse tones locally and read the amp. Preview, live knobs, channel switching and saved-channel writes are blocked.</p>
+      </button>
+      <button class="mode-card" data-mode="preview" aria-pressed="false">
+        <span class="mode-icon" aria-hidden="true">🎧</span>
+        <h3>Preview &amp; edit</h3>
+        <p>Click a tone to hear it and adjust the current sound. Saved channels remain protected.</p>
+      </button>
+      <button class="mode-card" data-mode="writes" aria-pressed="false">
+        <span class="mode-icon" aria-hidden="true">🔓</span>
+        <h3>Amp writes enabled</h3>
+        <p>Allows confirmed channel saves, system-setting Apply and full restore. Each destructive operation still asks first.</p>
+      </button>
+    </div>
+    <div class="mode-detail" id="mode-detail" aria-live="polite">
+      <h3 id="mode-title">Read-only</h3>
+      <p id="mode-text">Connecting in read-only still sends the editor-session setup/cleanup commands needed by the connection — it does not change tone parameters or select a channel.</p>
+    </div>
+  </section>
+
+  <!-- ===== Workflow ===== -->
+  <section class="panel" id="workflow" data-reveal>
+    <h2>Play first, save when you're ready</h2>
+    <ol class="steps">
+      <li data-step>
+        <span class="step-num">1</span>
+        <div><strong>Connect your amp by USB.</strong> In <em>Settings</em>, refresh the MIDI ports, choose the Katana's control port, and click <em>Connect</em>.</div>
+      </li>
+      <li data-step>
+        <span class="step-num">2</span>
+        <div><strong>Import your tones.</strong> Click <em>Import TSL…</em> and choose a Gen 3 <code>.tsl</code> file — or drop the file onto the app window. Each import adds a collection; your existing tones are kept.</div>
+      </li>
+      <li data-step>
+        <span class="step-num">3</span>
+        <div><strong>Choose “Preview &amp; edit.”</strong> Click a tone in <em>My tones</em> to hear it on your amp. Amp knobs and effects become live after the preview is read back. Your saved channels are unchanged.</div>
+      </li>
+      <li data-step>
+        <span class="step-num">4</span>
+        <div><strong>Keep a favorite.</strong> Click <em>Enable amp writes…</em> and answer <em>Yes</em>. Drag a tone from <em>My tones</em> onto an <em>Amp channel</em>, then answer <em>Yes</em> to the overwrite confirmation.</div>
+      </li>
+      <li data-step>
+        <span class="step-num">5</span>
+        <div><strong>Lock it.</strong> Click <em>Amp writes enabled · Lock</em> when you're done saving. Saving replaces only the chosen channel's previous tone.</div>
+      </li>
+    </ol>
+    <p class="fine">Saving to PANEL itself still requires an explicit PANEL destination and overwrite confirmation. No typed unlock phrases, no manual buffer-commit steps.</p>
+  </section>
+
+  <!-- ===== Editor demo ===== -->
+  <section class="panel" id="editor" data-reveal>
+    <h2>A focused editor</h2>
+    <p class="lede">Familiar amp knobs, colored effect banks, algorithm-specific controls, EQ, delay, reverb, solo, contour and signal routing. Turn a knob by dragging up/down, focus it and use arrow keys, or click the value to type an exact number.</p>
+    <div class="knob-grid" aria-label="Interactive knob demo">
+      <div class="knob-cell">
+        <div class="knob" tabindex="0" role="slider" data-knob aria-label="Level" aria-valuenow="62" aria-valuemin="0" aria-valuemax="100"><div class="knob-cap"></div><div class="knob-ring"></div></div>
+        <div class="knob-read"><span class="knob-name">Level</span><span class="knob-val">62</span></div>
+      </div>
+      <div class="knob-cell">
+        <div class="knob" tabindex="0" role="slider" data-knob aria-label="Drive" aria-valuenow="45" aria-valuemin="0" aria-valuemax="100"><div class="knob-cap"></div><div class="knob-ring"></div></div>
+        <div class="knob-read"><span class="knob-name">Drive</span><span class="knob-val">45</span></div>
+      </div>
+      <div class="knob-cell">
+        <div class="knob" tabindex="0" role="slider" data-knob aria-label="Bass" aria-valuenow="50" aria-valuemin="0" aria-valuemax="100"><div class="knob-cap"></div><div class="knob-ring"></div></div>
+        <div class="knob-read"><span class="knob-name">Bass</span><span class="knob-val">50</span></div>
+      </div>
+      <div class="knob-cell">
+        <div class="knob" tabindex="0" role="slider" data-knob aria-label="Treble" aria-valuenow="38" aria-valuemin="0" aria-valuemax="100"><div class="knob-cap"></div><div class="knob-ring"></div></div>
+        <div class="knob-read"><span class="knob-name">Treble</span><span class="knob-val">38</span></div>
+      </div>
+      <div class="knob-cell">
+        <div class="knob" tabindex="0" role="slider" data-knob aria-label="Reverb" aria-valuenow="71" aria-valuemin="0" aria-valuemax="100"><div class="knob-cap"></div><div class="knob-ring"></div></div>
+        <div class="knob-read"><span class="knob-name">Reverb</span><span class="knob-val">71</span></div>
+      </div>
+      <div class="knob-cell">
+        <div class="knob" tabindex="0" role="slider" data-knob aria-label="Delay" aria-valuenow="30" aria-valuemin="0" aria-valuemax="100"><div class="knob-cap"></div><div class="knob-ring"></div></div>
+        <div class="knob-read"><span class="knob-name">Delay</span><span class="knob-val">30</span></div>
+      </div>
+    </div>
+    <div class="tap-demo">
+      <h3>Tap tempo</h3>
+      <p>Tap the pad to set your tempo — the pulse locks to your tapping.</p>
+      <button class="tap-pad" id="tap-pad" aria-label="Tap tempo">TAP</button>
+      <div class="bpm-read" id="bpm-read">— BPM</div>
+      <div class="pulse" id="pulse" aria-hidden="true"></div>
+    </div>
+  </section>
+
+  <!-- ===== Library drag demo ===== -->
+  <section class="panel" id="library" data-reveal>
+    <h2>My tones + Amp channels</h2>
+    <p class="lede">A single place to choose, audition and drag-save presets. Drag a tone onto a channel — the app stages the tone directly in that channel, not in the current PANEL/edit buffer.</p>
+    <div class="lab">
+      <div class="shelf" aria-label="My tones">
+        <p class="shelf-title">My tones</p>
+        <div class="chips">
+          <span class="chip" draggable="true" data-tone="Puppet"><i class="dot"></i>Puppet</span>
+          <span class="chip" draggable="true" data-tone="Justice"><i class="dot"></i>Justice</span>
+          <span class="chip" draggable="true" data-tone="Kill"><i class="dot"></i>Kill</span>
+          <span class="chip" draggable="true" data-tone="Lightning"><i class="dot"></i>Lightning</span>
+        </div>
+        <p class="shelf-hint">drag a tone → a channel</p>
+      </div>
+      <div class="channels" aria-label="Amp channels">
+        <div class="chan" id="chan-A1" aria-label="Channel A1"><span class="chan-name">A1</span><span class="chan-fill" aria-hidden="true"></span></div>
+        <div class="chan" id="chan-A2" aria-label="Channel A2"><span class="chan-name">A2</span><span class="chan-fill" aria-hidden="true"></span></div>
+        <div class="chan" id="chan-A3" aria-label="Channel A3"><span class="chan-name">A3</span><span class="chan-fill" aria-hidden="true"></span></div>
+        <div class="chan" id="chan-A4" aria-label="Channel A4"><span class="chan-name">A4</span><span class="chan-fill" aria-hidden="true"></span></div>
+        <div class="chan" id="chan-PANEL" aria-label="PANEL"><span class="chan-name">PANEL</span><span class="chan-fill" aria-hidden="true"></span></div>
+      </div>
+      <div class="lab-actions">
+        <button class="btn ghost" id="reset-lab">Reset</button>
+      </div>
+    </div>
+    <div class="toast" id="toast" role="status" aria-live="polite"></div>
+  </section>
+
+  <!-- ===== Themes ===== -->
+  <section class="panel" id="themes" data-reveal>
+    <h2>Four looks, one app</h2>
+    <p class="lede">Choose a theme in <em>Settings → Appearance</em> — your choice is remembered. Try them here: the whole page follows your pick.</p>
+    <div class="theme-grid">
+      <button class="theme-card" data-theme="puppet">
+        <span class="swatch-row big" aria-hidden="true">
+          <i style="background:#1a1513"></i><i style="background:#271f1b"></i><i style="background:#3a2d24"></i><i style="background:#554233"></i><i style="background:#f4a65e"></i>
+        </span>
+        <h3>Puppet <em>default</em></h3>
+        <p>Warm copper/orange accents over earth-toned surfaces and controls.</p>
+      </button>
+      <button class="theme-card" data-theme="justice">
+        <span class="swatch-row big" aria-hidden="true">
+          <i style="background:#f4f8f2"></i><i style="background:#fefffc"></i><i style="background:#e3ede2"></i><i style="background:#bacebb"></i><i style="background:#2b6544"></i>
+        </span>
+        <h3>Justice</h3>
+        <p>Pearl-white surfaces with pale mint/sage accents. The only light theme.</p>
+      </button>
+      <button class="theme-card" data-theme="kill">
+        <span class="swatch-row big" aria-hidden="true">
+          <i style="background:#180f14"></i><i style="background:#23171d"></i><i style="background:#362029"></i><i style="background:#512f3b"></i><i style="background:#f54f5b"></i>
+        </span>
+        <h3>Kill</h3>
+        <p>Crimson accents and deep red-black surfaces.</p>
+      </button>
+      <button class="theme-card" data-theme="lightning">
+        <span class="swatch-row big" aria-hidden="true">
+          <i style="background:#111321"></i><i style="background:#1b273a"></i><i style="background:#2c3b52"></i><i style="background:#4c5e7c"></i><i style="background:#89b7ea"></i><i style="background:#b995f0"></i>
+        </span>
+        <h3>Lightning</h3>
+        <p>Metallic steel-blue surfaces and accents mixed with purple selections and highlights.</p>
+      </button>
+    </div>
+  </section>
+
+  <!-- ===== Build ===== -->
+  <section class="panel" id="build" data-reveal>
+    <h2>Run on Linux</h2>
+    <p class="lede">From a source checkout, with Rust 1.99.1 or newer, a C toolchain and ALSA development packages installed:</p>
+    <div class="codebox">
+      <button class="copy-btn" id="copy-build" aria-label="Copy build commands">Copy</button>
+      <pre><code id="build-code">cargo build --release --locked
+./target/release/rusty-boss</code></pre>
+    </div>
+    <ul class="fine-list">
+      <li>Native Wayland as well as X11 — XWayland is not required.</li>
+      <li>A working graphical Linux desktop and ALSA USB-MIDI support are required.</li>
+      <li>Choose the <strong>MIDI control port</strong>, not an audio device; the port list is not scanned at startup.</li>
+      <li>Don't run the app as root or make sound devices world-writable.</li>
+    </ul>
+  </section>
+
+  <!-- ===== Notes ===== -->
+  <section class="panel" id="notes" data-reveal>
+    <h2>Notes &amp; provenance</h2>
+    <ul class="fine-list">
+      <li>Rusty Boss is an independent Linux editor, <strong>not an official Roland/BOSS product</strong>. Roland and BOSS are trademarks of their owners; no endorsement or affiliation is implied.</li>
+      <li>Rusty Boss controls the amp's own sound engine. It is not an audio driver, amp simulator, or DAW, and does not configure USB-audio routing.</li>
+      <li>The header uses <strong>Russo One</strong> (SIL Open Font License 1.1), bundled with the app. The page embeds the same typeface.</li>
+      <li>Local library: <code>$XDG_DATA_HOME/rusty-boss/library.json</code> — autosaved every ~750 ms while changed and on normal close. Bounded to 16 MiB, 100 collections, 1,000 tones each.</li>
+      <li>Export <code>.tsl</code> shares the current collection; it does <strong>not</strong> write to the amplifier.</li>
+      <li>License: <strong>GPLv3</strong>. See <code>NOTICE.md</code>, <code>THIRD-PARTY-NOTICES.md</code> and <code>docs/LICENSE-REVIEW.md</code> for the full review.</li>
+    </ul>
+  </section>
+
+  <footer class="foot">
+    <p><span class="wm-a">RUSTY</span> <span class="wm-b">BOSS</span> · v1.0.0 · KATANA Gen 3 · Linux · GPLv3</p>
+    <p class="foot-fine">Companion page for the Rusty Boss app · palette and typeface taken from the application (src/gui/theme.rs, assets/fonts). This page is a demo; it never connects to hardware. Built with Qwen3.8-27B.</p>
+  </footer>
+
+  <script src="js/main.js"></script>
+</body>
+</html>
