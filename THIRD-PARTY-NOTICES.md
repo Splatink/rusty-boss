@@ -1,5 +1,10 @@
 # Third-party notices — Rusty Boss 1.0.0
 
+The experimental Bluetooth branch supplements this historical inventory with
+[Bluetooth dependency notices](docs/licenses/BLUETOOTH-NOTICES.md) and
+[checksums](docs/licenses/bluetooth-dependencies.csv). Ship both notice documents
+with builds containing native Bluetooth support.
+
 Generated on 2026-10-19 for the locked default Linux x86_64 normal/build dependency graph. Build-time packages are included conservatively; this is not a claim that every package is linked. Other feature/platform builds require their own notice review.
 
 Archive checksums and notice-file hashes are recorded in `docs/licenses/dependencies.csv`. Where an archive omitted standalone notices, the upstream source URL is recorded below. Six egui-family crates have an unavailable VCS revision; these explicitly use the 0.37.0 release tag (annotated tag 418687fa18fdac8a9b1b6c8f4a2eb1afd2df4c47, resolved commit 841a328ba2dd8f6996beb7189ebb7fc00e668a2a) instead, pending exact-revision verification. Identical texts are reproduced once and referenced by SHA-256. These are collected notice candidates, not a legal opinion or an exhaustive source-level rights audit.

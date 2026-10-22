@@ -24,14 +24,19 @@ five amp types, effect pages, cabinet/global EQ settings, and six coloured tone
 memories (three each on CH A and CH B) plus PANEL. Gen 3-only controls and its
 four/eight-channel bank layout are omitted.
 
-For Air control, pair **KATANA-AIR MIDI** through a Linux Bluetooth MIDI service
-that exposes an ALSA sequencer port, then open **Settings → Refresh Air MIDI
-ports**, select the port and **Connect Air**. USB audio and Bluetooth audio
-are separate from MIDI control. Rusty Boss does not manage Bluetooth pairing.
-Connection sends only identity and parameter reads. Enable **Preview & edit**
-to adjust the current sound or recall a tone; each completed edit is read back.
-Use **Refresh from amp** after physical knob or channel changes. Cabinet/global
-EQ requires enabled amp writes and confirmation for each setting.
+For Air control, turn on the computer's Bluetooth and the amp. Select
+**KATANA-AIR · Experimental**, open **Settings → Find Bluetooth amplifiers**,
+choose **KATANA-AIR MIDI**, and click **Connect Air**. If pairing is required,
+use **Pair device…** and accept the desktop Bluetooth prompt. No MIDI bridge,
+special BlueZ build or manual port setup is required.
+
+The connection uses standard Linux BlueZ. USB audio and Bluetooth audio are
+separate from MIDI control. Nothing connects automatically. After Bluetooth setup,
+Air's protocol handshake sends only identity and parameter reads. Enable
+**Preview & edit** to adjust the current sound or recall a tone; each completed
+edit is read back. Use **Refresh from amp** after physical knob or channel changes.
+Cabinet/global EQ requires enabled amp writes and confirmation for each setting.
+See [native Bluetooth setup and architecture](docs/BLUETOOTH.md).
 
 Air TSL import/export, saved-tone writes and full backup/restore are not yet
 implemented. Gen 3 collections remain separate and cannot be sent to an Air.

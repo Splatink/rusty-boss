@@ -226,6 +226,9 @@ impl<T: Transport> AirSession<T> {
     pub fn snapshot(&self) -> Option<&Snapshot> {
         self.snapshot.as_ref()
     }
+    pub fn is_connected(&self) -> bool {
+        self.transport.is_connected()
+    }
     fn read(&mut self, address: Address, size: usize) -> Result<Vec<u8>> {
         ensure!((1..=128).contains(&size), "Air reads must be 1..128 bytes");
         address.plus(size - 1)?;

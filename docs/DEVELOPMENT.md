@@ -154,3 +154,15 @@ python3 tools/recover_editor.py /absolute/path/to/Resources/html
 
 Keep artifact identities, evidence IDs and limitations in technical docs. Do
 not present static recovery or mock tests as observed hardware behavior.
+
+### Native Bluetooth transport
+
+Default builds include the `bluetooth` feature, which uses pure Rust zbus and
+Tokio to reach standard Linux BlueZ GATT. There is no libdbus development-library
+requirement and no dependency on BlueZ's ALSA MIDI build option. A working BlueZ
+service and BLE adapter are runtime requirements only for Bluetooth connections.
+
+`cargo test --locked --no-default-features --features bluetooth` runs the codec
+and private fake-BlueZ tests without a GUI. Tests require `dbus-daemon` and the
+ability to create a private Unix socket; they do not contact real Bluetooth devices.
+See [Bluetooth architecture and verification](BLUETOOTH.md).

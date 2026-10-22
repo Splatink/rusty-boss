@@ -32,6 +32,10 @@ pub(super) struct AirState {
     busy: bool,
     status: String,
     pending_global: Option<(String, u16)>,
+    #[cfg(feature = "bluetooth")]
+    devices: Vec<crate::bluetooth::Device>,
+    #[cfg(feature = "bluetooth")]
+    bluetooth_device: String,
     #[cfg(feature = "midi")]
     ports: Vec<crate::midi::Port>,
     #[cfg(feature = "midi")]
@@ -52,6 +56,10 @@ impl AirState {
             busy: false,
             status: "Offline · Connect to read the Air's current tone".into(),
             pending_global: None,
+            #[cfg(feature = "bluetooth")]
+            devices: Vec::new(),
+            #[cfg(feature = "bluetooth")]
+            bluetooth_device: String::new(),
             #[cfg(feature = "midi")]
             ports: Vec::new(),
             #[cfg(feature = "midi")]
@@ -81,9 +89,18 @@ impl AirState {
             return;
         }
         self.worker.cancel.store(false, Ordering::Relaxed);
+        let status = match &job {
+            #[cfg(feature = "bluetooth")]
+            AirJob::ScanBluetooth => "Searching for nearby Bluetooth MIDI devices…",
+            #[cfg(feature = "bluetooth")]
+            AirJob::PairBluetooth(_) => "Pairing… Respond to any desktop Bluetooth prompt",
+            #[cfg(feature = "bluetooth")]
+            AirJob::ConnectBluetooth(_) => "Connecting Bluetooth MIDI and reading the Air…",
+            _ => "Reading / verifying Air settings…",
+        };
         if self.worker.tx.send(job).is_ok() {
             self.busy = true;
-            self.status = "Reading / verifying Air settings…".into();
+            self.status = status.into();
         }
     }
     #[cfg(feature = "midi")]
@@ -91,6 +108,26 @@ impl AirState {
         while let Ok(event) = self.worker.rx.try_recv() {
             self.busy = false;
             match event {
+                #[cfg(feature = "bluetooth")]
+                AirEvent::Devices(devices) => {
+                    if !devices.iter().any(|d| d.id == self.bluetooth_device) {
+                        self.bluetooth_device =
+                            devices.first().map(|d| d.id.clone()).unwrap_or_default();
+                    }
+                    self.status = if devices.is_empty() {
+                        "No Bluetooth MIDI devices found. Turn on the amp and Bluetooth, close other editors, then search again.".into()
+                    } else {
+                        "Choose your amplifier, then Connect Air".into()
+                    };
+                    self.devices = devices;
+                }
+                #[cfg(feature = "bluetooth")]
+                AirEvent::Paired(id) => {
+                    if let Some(device) = self.devices.iter_mut().find(|d| d.id == id) {
+                        device.paired = true;
+                    }
+                    self.status = "Device paired · Connect Air to read its settings".into();
+                }
                 AirEvent::Snapshot(snapshot) => {
                     self.connected = true;
                     self.draft = snapshot.values.clone();
@@ -108,6 +145,8 @@ impl AirState {
                     self.status = "Disconnected".into();
                 }
                 AirEvent::Error(error) => {
+                    self.connected = false;
+                    self.pending_global = None;
                     self.snapshot = None;
                     self.draft.clear();
                     self.status = error;
@@ -120,6 +159,12 @@ impl AirState {
 #[cfg(feature = "midi")]
 enum AirJob {
     Connect(String),
+    #[cfg(feature = "bluetooth")]
+    ScanBluetooth,
+    #[cfg(feature = "bluetooth")]
+    ConnectBluetooth(crate::bluetooth::Device),
+    #[cfg(feature = "bluetooth")]
+    PairBluetooth(crate::bluetooth::Device),
     Disconnect,
     Refresh,
     Set(String, u16),
@@ -129,6 +174,10 @@ enum AirJob {
 #[cfg(feature = "midi")]
 enum AirEvent {
     Snapshot(Snapshot),
+    #[cfg(feature = "bluetooth")]
+    Devices(Vec<crate::bluetooth::Device>),
+    #[cfg(feature = "bluetooth")]
+    Paired(String),
     Disconnected,
     Error(String),
 }
@@ -147,9 +196,21 @@ impl AirWorker {
         let cancel = Arc::new(AtomicBool::new(false));
         let stop = cancel.clone();
         let handle = thread::spawn(move || {
-            use crate::{air::AirSession, midi::SequencerTransport};
-            let mut session: Option<AirSession<SequencerTransport>> = None;
-            while let Ok(job) = jobs.recv() {
+            use crate::{air::AirSession, midi::SequencerTransport, session::Transport};
+            let mut session: Option<AirSession<Box<dyn Transport>>> = None;
+            loop {
+                let job = match jobs.recv_timeout(Duration::from_millis(200)) {
+                    Ok(job) => job,
+                    Err(mpsc::RecvTimeoutError::Disconnected) => break,
+                    Err(mpsc::RecvTimeoutError::Timeout) => {
+                        if session.as_ref().is_some_and(|s| !s.is_connected()) {
+                            gate.set(Access::ReadOnly);
+                            session.take();
+                            let _ = events.send(AirEvent::Error("Bluetooth connection lost · Connect again to read the current sound".into()));
+                        }
+                        continue;
+                    }
+                };
                 let shutdown = matches!(job, AirJob::Shutdown);
                 let result = (|| -> anyhow::Result<AirEvent> {
                     match job {
@@ -161,7 +222,32 @@ impl AirWorker {
                         AirJob::Connect(port) => {
                             session.take();
                             let transport = SequencerTransport::open(&port, stop.clone())?;
-                            let mut s = AirSession::connect(transport, gate.clone())?;
+                            let mut s = AirSession::connect(
+                                Box::new(transport) as Box<dyn Transport>,
+                                gate.clone(),
+                            )?;
+                            let snapshot = s.refresh()?;
+                            session = Some(s);
+                            Ok(AirEvent::Snapshot(snapshot))
+                        }
+                        #[cfg(feature = "bluetooth")]
+                        AirJob::ScanBluetooth => {
+                            Ok(AirEvent::Devices(crate::bluetooth::discover(stop.clone())?))
+                        }
+                        #[cfg(feature = "bluetooth")]
+                        AirJob::PairBluetooth(device) => {
+                            crate::bluetooth::pair(&device, stop.clone())?;
+                            Ok(AirEvent::Paired(device.id))
+                        }
+                        #[cfg(feature = "bluetooth")]
+                        AirJob::ConnectBluetooth(device) => {
+                            session.take();
+                            let transport =
+                                crate::bluetooth::BluetoothTransport::open(&device, stop.clone())?;
+                            let mut s = AirSession::connect(
+                                Box::new(transport) as Box<dyn Transport>,
+                                gate.clone(),
+                            )?;
                             let snapshot = s.refresh()?;
                             session = Some(s);
                             Ok(AirEvent::Snapshot(snapshot))
@@ -186,11 +272,12 @@ impl AirWorker {
                         )),
                     }
                 })();
-                if events
-                    .send(result.unwrap_or_else(|e| AirEvent::Error(format!("{e:#}"))))
-                    .is_err()
-                    || shutdown
-                {
+                let event = result.unwrap_or_else(|e| {
+                    gate.set(Access::ReadOnly);
+                    session.take();
+                    AirEvent::Error(format!("{e:#}"))
+                });
+                if events.send(event).is_err() || shutdown {
                     break;
                 }
             }
@@ -365,9 +452,81 @@ impl App {
         }
     }
     fn air_connection(&mut self, ui: &mut egui::Ui) {
-        ui.label("Pair KATANA-AIR MIDI using your Linux Bluetooth MIDI service, then refresh the ALSA sequencer ports below. USB audio and KATANA-AIR Audio are separate connections.");
-        #[cfg(feature = "midi")]
+        ui.label("Turn on your amplifier and Bluetooth on this computer. Find your amp's MIDI connection below, then Connect Air. Close phone or desktop editors that are already using it.");
+        #[cfg(feature = "bluetooth")]
         {
+            if ui
+                .add_enabled(
+                    !self.air.busy && !self.air.connected,
+                    egui::Button::new("Find Bluetooth amplifiers"),
+                )
+                .clicked()
+            {
+                self.air.submit(AirJob::ScanBluetooth);
+            }
+            for device in &self.air.devices {
+                ui.add_enabled_ui(!self.air.connected && !self.air.busy, |ui| {
+                    ui.radio_value(
+                        &mut self.air.bluetooth_device,
+                        device.id.clone(),
+                        format!(
+                            "{} · {}{}",
+                            device.name,
+                            device.address,
+                            if device.paired { " · Paired" } else { "" }
+                        ),
+                    );
+                });
+            }
+            let chosen = self
+                .air
+                .devices
+                .iter()
+                .find(|d| d.id == self.air.bluetooth_device)
+                .cloned();
+            ui.horizontal_wrapped(|ui| {
+                if ui.add_enabled(!self.air.busy && !self.air.connected && chosen.is_some(), egui::Button::new("Connect Air")).clicked() && let Some(device) = chosen.clone() {
+                    self.set_access(Access::ReadOnly);
+                    self.air.submit(AirJob::ConnectBluetooth(device));
+                }
+                if ui.add_enabled(!self.air.busy && !self.air.connected && chosen.as_ref().is_some_and(|d| !d.paired), egui::Button::new("Pair device…")).on_hover_text("Use if the device requires pairing. Respond to the normal desktop Bluetooth prompt, then connect.").clicked() && let Some(device) = chosen {
+                    self.air.submit(AirJob::PairBluetooth(device));
+                }
+            });
+            ui.small(
+                "Bluetooth connects directly through the app. No separate MIDI bridge is needed.",
+            );
+        }
+        #[cfg(all(feature = "midi", not(feature = "bluetooth")))]
+        ui.label("This build has no native Bluetooth support. Use an existing ALSA MIDI connection below, or rebuild with --features bluetooth.");
+        #[cfg(feature = "bluetooth")]
+        ui.horizontal_wrapped(|ui| {
+            if ui
+                .add_enabled(
+                    self.air.connected && !self.air.busy,
+                    egui::Button::new("Disconnect Air"),
+                )
+                .clicked()
+            {
+                self.set_access(Access::ReadOnly);
+                self.air.submit(AirJob::Disconnect);
+            }
+            if ui
+                .add_enabled(
+                    self.air.connected && !self.air.busy,
+                    egui::Button::new("Read Air settings"),
+                )
+                .clicked()
+            {
+                self.air.submit(AirJob::Refresh);
+            }
+            if self.air.busy && ui.button("Cancel Air operation").clicked() {
+                self.write_gate.set(Access::ReadOnly);
+                self.air.worker.cancel.store(true, Ordering::Relaxed);
+            }
+        });
+        #[cfg(feature = "midi")]
+        egui::CollapsingHeader::new("Advanced: existing ALSA MIDI port").show(ui, |ui| {
             if ui
                 .add_enabled(!self.air.busy, egui::Button::new("Refresh Air MIDI ports"))
                 .clicked()
@@ -402,7 +561,7 @@ impl App {
                 } else if ui
                     .add_enabled(
                         !self.air.busy && !self.air.port.is_empty(),
-                        egui::Button::new("Connect Air"),
+                        egui::Button::new("Connect via ALSA"),
                     )
                     .clicked()
                 {
@@ -423,10 +582,10 @@ impl App {
                     self.air.submit(AirJob::Refresh);
                 }
             });
-        }
+        });
         #[cfg(not(feature = "midi"))]
         ui.label("This build is offline-only (no MIDI support).");
-        ui.small("Air connect uses identity and parameter reads only. Pairing is managed by Linux; the app never connects automatically.");
+        ui.small("After the Bluetooth connection is established, Air connect sends only identity and parameter reads. Nothing connects automatically.");
         ui.separator();
         if let Some(block) = self
             .air

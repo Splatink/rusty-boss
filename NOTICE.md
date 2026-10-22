@@ -26,6 +26,10 @@ for the pinned source and file hash.
 Third-party Rust dependencies retain their own licenses. The default Linux
 normal/build dependency and embedded-font notices are collected in
 `THIRD-PARTY-NOTICES.md`; ship that document and `LICENSE` with binary releases.
+On the experimental Bluetooth branch, also ship
+`docs/licenses/BLUETOOTH-NOTICES.md`, which contains the newly enabled dependency
+notices. Their versions, archive checksums and notice hashes are recorded in
+`docs/licenses/bluetooth-dependencies.csv`.
 The all-platform locked dependency inventory is in `docs/licenses/dependencies.csv`.
 The notice bundle identifies exact upstream sources and explicitly labels six
 egui release-tag fallbacks where published VCS revisions were unavailable.

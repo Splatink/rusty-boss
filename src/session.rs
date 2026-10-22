@@ -13,9 +13,27 @@ use std::{
 pub trait Transport {
     fn send(&mut self, bytes: &[u8]) -> Result<()>;
     fn receive(&mut self, timeout: Duration) -> Result<Option<Vec<u8>>>;
+    /// Transports with asynchronous disconnect detection can invalidate idle UI.
+    fn is_connected(&self) -> bool {
+        true
+    }
     fn wait(&mut self, duration: Duration) -> Result<()> {
         std::thread::sleep(duration);
         Ok(())
+    }
+}
+impl<T: Transport + ?Sized> Transport for Box<T> {
+    fn send(&mut self, bytes: &[u8]) -> Result<()> {
+        (**self).send(bytes)
+    }
+    fn receive(&mut self, timeout: Duration) -> Result<Option<Vec<u8>>> {
+        (**self).receive(timeout)
+    }
+    fn wait(&mut self, duration: Duration) -> Result<()> {
+        (**self).wait(duration)
+    }
+    fn is_connected(&self) -> bool {
+        (**self).is_connected()
     }
 }
 /// Tracks every requested byte, not just the first matching DT1. Unrelated,

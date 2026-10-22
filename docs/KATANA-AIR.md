@@ -17,14 +17,18 @@ channel change unless saved on the amplifier.
 
 ## Connection and permissions
 
-Select KATANA-AIR in the header. Pair **KATANA-AIR MIDI** through a Linux
-Bluetooth MIDI service that exports an ALSA sequencer port. In Settings, refresh
-Air MIDI ports, select the matching `seq:client:port`, then Connect Air. The new
-sequencer transport handles MIDI events; Linux handles BLE timestamps and pairing.
-The USB/raw-MIDI connection for Gen 3 remains separate. Rusty Boss does not pair
-Bluetooth devices itself. `rusty-boss ports --air` lists sequencer ports without
-opening an amplifier session.
-No editor-mode setup or cleanup writes are sent during Air connection.
+Select KATANA-AIR in the header. In Settings, **Find Bluetooth amplifiers**,
+select **KATANA-AIR MIDI** and **Connect Air**. Use **Pair device…** and accept the
+desktop Bluetooth prompt if a bond is required. The app uses BlueZ GATT directly;
+no BlueZ ALSA MIDI plugin, external MIDI bridge or manual port setup is required.
+Bluetooth discovery, framing and connection code are reusable across amplifier
+protocols. See [Bluetooth setup, architecture and tests](BLUETOOTH.md).
+
+The previous ALSA sequencer transport remains under **Advanced: existing ALSA
+MIDI port**. `rusty-boss ports --air` lists only those optional sequencer ports;
+it does not scan Bluetooth. The USB/raw-MIDI connection for Gen 3 is separate.
+The Bluetooth link and notification subscription are established before Air's
+protocol handshake. No amp editor-mode setup or cleanup commands are sent.
 
 Connection checks an Air identity reply (Roland family `50 00`, device `00`).
 Air SysEx uses the four-byte model ID `00 00 00 50`, device `00`, Roland checksum,

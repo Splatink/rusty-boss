@@ -87,6 +87,9 @@ impl<T: Transport> ReadRequestsOnly<T> {
     }
 }
 impl<T: Transport> Transport for ReadRequestsOnly<T> {
+    fn is_connected(&self) -> bool {
+        self.inner.is_connected()
+    }
     fn send(&mut self, frame: &[u8]) -> Result<()> {
         ensure!(
             frame == IDENTITY_REQUEST
@@ -118,6 +121,9 @@ impl<T: Transport> Guarded<T> {
     }
 }
 impl<T: Transport> Transport for Guarded<T> {
+    fn is_connected(&self) -> bool {
+        self.inner.is_connected()
+    }
     fn send(&mut self, frame: &[u8]) -> Result<()> {
         let mute = match Message::decode(frame) {
             Ok(Message::Data { address, data, .. }) if address == Address::packed(0x7f010109)? => {

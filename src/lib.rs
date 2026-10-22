@@ -1,4 +1,6 @@
 pub mod air;
+#[cfg(feature = "bluetooth")]
+pub mod bluetooth;
 pub mod diagnostics;
 pub mod document;
 pub mod editor;
