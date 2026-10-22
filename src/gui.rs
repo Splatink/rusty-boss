@@ -13,6 +13,7 @@ use std::{
     collections::{BTreeMap, BTreeSet, VecDeque},
     path::PathBuf,
 };
+mod air;
 mod classic;
 mod collections;
 mod icons;
@@ -336,6 +337,7 @@ enum Page {
     Settings,
 }
 struct App {
+    air: air::AirState,
     schema: Schema,
     catalog: Catalog,
     section: Section,
@@ -397,6 +399,7 @@ impl App {
         let write_gate = WriteGate::default();
         let (library, library_path, library_error) = Self::load_library(&schema);
         Self {
+            air: air::AirState::new(write_gate.clone()),
             #[cfg(feature = "midi")]
             worker: Worker::new(schema.clone(), write_gate.clone()),
             #[cfg(feature = "midi")]
@@ -553,6 +556,10 @@ impl App {
         self.pending_preview = None;
     }
     fn set_access(&mut self, access: Access) {
+        if (access as u8) < (self.write_gate.access() as u8) {
+            self.air.cancel_operation();
+        }
+        self.air.clear_draft_confirmation();
         // An acknowledged in-flight preview must not re-arm after protection changes.
         let resume = self.synced && self.connected.is_some() && !self.busy;
         let channel_patch = self.channel_patch.take();
@@ -907,12 +914,14 @@ impl App {
                     wordmark::show(ui, self.theme.accent());
                     ui.label(RichText::new("KATANA / LINUX").size(11.).weak());
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        ui.small(
+                        ui.small(if self.is_air() && self.air.is_connected() {
+                            "KATANA-AIR"
+                        } else {
                             self.connected
                                 .as_ref()
                                 .map(|id| id.name)
-                                .unwrap_or("Offline"),
-                        );
+                                .unwrap_or("Offline")
+                        });
                         if self.dirty {
                             ui.label(
                                 RichText::new("● Saving locally…")
@@ -921,6 +930,9 @@ impl App {
                             );
                         }
                     });
+                });
+                ui.horizontal_wrapped(|ui| {
+                    self.amp_selector(ui);
                 });
                 ui.horizontal_wrapped(|ui| {
                     for (p, label) in [
@@ -980,6 +992,16 @@ impl App {
     fn channel_cards(&mut self, ui: &mut egui::Ui) {
         ui.label(RichText::new("AMP CHANNELS").size(11.).strong());
         if self.connected.is_none() {
+            let profile = Identity {
+                device: 16,
+                model_code: self.model_code(),
+                name: crate::editor::model_name(self.model_code()),
+            };
+            ui.horizontal_wrapped(|ui| {
+                for slot in (0..9).filter(|slot| profile.slot_exists(*slot)) {
+                    ui.add_enabled(false, egui::Button::new(slot_label(slot)));
+                }
+            });
             ui.weak("Connect your amp in Settings to see its channels.");
             return;
         }
@@ -1255,22 +1277,8 @@ impl App {
         egui::CollapsingHeader::new("Backup & channel reads").show(ui, |ui| {
             self.backup_page(ui);
         });
-        egui::CollapsingHeader::new("Offline amp model").show(ui, |ui| {
-            ui.small("Used only when no amp is connected.");
-            egui::ComboBox::from_id_salt("offline-model")
-                .selected_text(crate::editor::model_name(self.offline_model))
-                .show_ui(ui, |ui| {
-                    for code in 5..=11 {
-                        ui.selectable_value(
-                            &mut self.offline_model,
-                            code,
-                            crate::editor::model_name(code),
-                        );
-                    }
-                });
-        });
         egui::CollapsingHeader::new("Help & connection log").show(ui, |ui| {
-            ui.label(concat!("Rusty Boss ", env!("CARGO_PKG_VERSION"), " · A BOSS KATANA editor for Linux. Currently supports Gen 3."));
+            ui.label(concat!("Rusty Boss ", env!("CARGO_PKG_VERSION"), " · A BOSS KATANA editor for Linux. Gen 3 + experimental Air support."));
             ui.label("Experimental hardware support: keep a known-good backup before saving channels, applying settings or restoring a backup.");
             ui.label("Independent software. Not affiliated with Roland/BOSS.");
             egui::CollapsingHeader::new("Typeface license").show(ui, |ui| {
@@ -1551,7 +1559,8 @@ impl eframe::App for App {
         #[cfg(feature = "midi")]
         self.events();
         self.poll_file_dialog();
-        if !self.busy
+        if !self.is_air()
+            && !self.busy
             && self.confirm.is_none()
             && let Some(path) = ctx.input(|i| {
                 i.raw
@@ -1565,22 +1574,26 @@ impl eframe::App for App {
             self.import_file();
         }
         self.header(ui);
-        if self.page != Page::Settings {
-            self.preset_sidebar(ui);
-        }
-        match self.page {
-            Page::Editor => self.classic_editor(ui),
-            Page::Library => {
-                egui::CentralPanel::default().show(ui, |ui| {
-                    egui::ScrollArea::vertical().show(ui, |ui| {
-                        ui.add_enabled_ui(!self.busy, |ui| self.library_page(ui));
-                    });
-                });
+        if self.is_air() {
+            self.air_page(ui);
+        } else {
+            if self.page != Page::Settings {
+                self.preset_sidebar(ui);
             }
-            Page::Settings => {
-                egui::CentralPanel::default().show(ui, |ui| {
-                    egui::ScrollArea::vertical().show(ui, |ui| self.connection(ui));
-                });
+            match self.page {
+                Page::Editor => self.classic_editor(ui),
+                Page::Library => {
+                    egui::CentralPanel::default().show(ui, |ui| {
+                        egui::ScrollArea::vertical().show(ui, |ui| {
+                            ui.add_enabled_ui(!self.busy, |ui| self.library_page(ui));
+                        });
+                    });
+                }
+                Page::Settings => {
+                    egui::CentralPanel::default().show(ui, |ui| {
+                        egui::ScrollArea::vertical().show(ui, |ui| self.connection(ui));
+                    });
+                }
             }
         }
         self.confirmation(ctx);

@@ -130,6 +130,7 @@ port enumeration or connection.
 
 ```sh
 rusty-boss ports
+rusty-boss ports --air      # ALSA sequencer ports, including OS-exposed BLE MIDI
 rusty-boss schema --filter booster
 rusty-boss new my-tones.tsl --name "My tones"
 rusty-boss inspect my-tones.tsl

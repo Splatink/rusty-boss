@@ -31,3 +31,16 @@ The notice bundle identifies exact upstream sources and explicitly labels six
 egui release-tag fallbacks where published VCS revisions were unavailable.
 These collected notices do not resolve the vendor-derived data rights question
 or replace a release-specific legal/provenance review. See `docs/RELEASE.md`.
+
+## KATANA-AIR parameter definitions and layouts
+
+`data/katana-air.json` contains parameter definitions and effect layouts adapted
+from [KatanaAirDesktop](https://github.com/npsfsz/KatanaAirDesktop), commit
+`a442bffe4e09941be0c75265993932ee9ac19f63`, distributed under GPL-3.0-or-later.
+Its parameter map and effect layouts were adapted from AIR FxFloorBoard,
+Copyright 2005–2025 Colin Willcocks and Uco Mesdag.
+Upstream project: https://sourceforge.net/projects/air-fxfloorboard/.
+The upstream layout files permit GNU GPL version 2 or later; its distributed
+license text and KatanaAirDesktop use GNU GPL version 3. This adaptation is
+provided under GNU GPL version 3 or later; the complete GPLv3 is in `LICENSE`.
+Source provenance and experimental limitations are in `docs/KATANA-AIR.md`.

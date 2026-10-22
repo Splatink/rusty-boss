@@ -12,12 +12,34 @@ Rusty Boss is a Linux app for editing **BOSS KATANA amplifiers** and organizing
 presets. Shape your sound with amp knobs and effect controls, try downloaded tones,
 and save your favorites straight to your amp—without Wine or Windows.
 
-**Currently supports KATANA Gen 3.** MkI and MkII amps and preset conversion are
-outside this app's scope.
+**Supports KATANA Gen 3, with experimental KATANA-AIR support on this branch.**
+Choose your amplifier in the header: the editor, settings and channels follow
+that selection. MkI/MkII amps and preset conversion remain outside this app's scope.
+
+### KATANA-AIR — experimental
+
+Air support is **experimental and has not been validated against an Air amplifier**.
+Select **KATANA-AIR · Experimental** in the header. The Air layout has its own
+five amp types, effect pages, cabinet/global EQ settings, and six coloured tone
+memories (three each on CH A and CH B) plus PANEL. Gen 3-only controls and its
+four/eight-channel bank layout are omitted.
+
+For Air control, pair **KATANA-AIR MIDI** through a Linux Bluetooth MIDI service
+that exposes an ALSA sequencer port, then open **Settings → Refresh Air MIDI
+ports**, select the port and **Connect Air**. USB audio and Bluetooth audio
+are separate from MIDI control. Rusty Boss does not manage Bluetooth pairing.
+Connection sends only identity and parameter reads. Enable **Preview & edit**
+to adjust the current sound or recall a tone; each completed edit is read back.
+Use **Refresh from amp** after physical knob or channel changes. Cabinet/global
+EQ requires enabled amp writes and confirmation for each setting.
+
+Air TSL import/export, saved-tone writes and full backup/restore are not yet
+implemented. Gen 3 collections remain separate and cannot be sent to an Air.
+See [Air protocol evidence and limitations](docs/KATANA-AIR.md).
 
 ![Rusty Boss with the default Puppet theme](docs/screenshots/puppet.png)
 
-## Play first, save when you're ready
+## Gen 3: play first, save when you're ready
 
 1. **Connect your amp by USB.** In **Settings**, refresh the MIDI ports, choose
    the Katana's control port, and click **Connect**.
@@ -56,9 +78,9 @@ The controls at the top tell you what the app is allowed to change:
 | **Amp writes enabled** | Allows confirmed channel saves, system-setting Apply and full restore. Each destructive operation still asks first. |
 
 The app starts in **Read-only** every time. It never connects automatically and
-never remembers permission to write. Connecting in read-only still sends the
-editor-session setup/cleanup commands needed by the connection; it does not
-change tone parameters or select a channel.
+never remembers permission to write. Gen 3 connections in read-only still send
+editor-session setup/cleanup commands; they do not change tone parameters or
+select a channel. Air connections send only identity requests and parameter reads.
 
 ## A focused editor
 

@@ -9,7 +9,7 @@ use std::path::PathBuf;
 #[derive(Parser)]
 #[command(
     name = "rusty-boss",
-    about = "Rusty Boss — independent Linux Katana Gen 3 editor (experimental)",
+    about = "Rusty Boss — Linux Katana Gen 3 and experimental Katana Air editor",
     version
 )]
 struct Args {
@@ -42,7 +42,11 @@ enum Command {
         port: String,
     },
     /// List duplex ALSA raw MIDI ports (never auto-connects)
-    Ports,
+    Ports {
+        /// List ALSA sequencer ports for Bluetooth MIDI (KATANA-AIR)
+        #[arg(long)]
+        air: bool,
+    },
 }
 fn main() -> Result<()> {
     let args = Args::parse();
@@ -154,13 +158,22 @@ fn main() -> Result<()> {
                 bail!("build with --features midi for ALSA support");
             }
         }
-        Command::Ports => {
+        Command::Ports { air } => {
             #[cfg(feature = "midi")]
             {
-                let ports = rusty_boss::midi::ports()?;
+                let ports = if air {
+                    rusty_boss::midi::sequencer_ports()?
+                } else {
+                    rusty_boss::midi::ports()?
+                };
                 if ports.is_empty() {
                     println!(
-                        "No duplex raw MIDI ports. Connect the amp via USB and check ALSA driver support."
+                        "{}",
+                        if air {
+                            "No duplex sequencer ports. Pair KATANA-AIR MIDI through a Linux Bluetooth MIDI service."
+                        } else {
+                            "No duplex raw MIDI ports. Connect the amp via USB and check ALSA driver support."
+                        }
                     );
                 }
                 for p in ports {
@@ -169,6 +182,7 @@ fn main() -> Result<()> {
             }
             #[cfg(not(feature = "midi"))]
             {
+                let _ = air;
                 bail!("build with --features midi for ALSA support");
             }
         }

@@ -1,3 +1,4 @@
+pub mod air;
 pub mod diagnostics;
 pub mod document;
 pub mod editor;
