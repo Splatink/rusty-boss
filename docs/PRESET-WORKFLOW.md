@@ -88,6 +88,15 @@ System editing is staged inside Settings rather than a raw/System top-level tab.
   row, then mutes and requests one acknowledged single-row export (`40 <slot>`).
   It never writes the active edit buffer or sends `PATCH_WRITE`. A/B channel
   saves therefore do not use PANEL as scratch space, even immediately after reset.
+- Before each parameter request or acknowledged command, already-queued input
+  is drained into the notification queue. An old channel report, settings reply
+  or export acknowledgement cannot satisfy a new operation just because its
+  address matches. The drain is bounded and fails closed on input overload.
+  Overlapping read responses preserve notification bytes outside the requested
+  range. Mock regressions cover these cases; this is not hardware validation.
+  SysEx has no transaction IDs: a delayed old reply arriving **after** a new send
+  remains indistinguishable. This does not establish an atomic snapshot or remove
+  the need to stop after failures rather than retrying blindly.
 - If staging fails, no export follows. No acknowledgements are retried. Success
   updates the card's name and disarms live controls; click the saved channel to
   read and edit its actual sound rather than assuming its buffer matches.

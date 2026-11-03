@@ -9,7 +9,15 @@ pub const MAX_DATA: usize = 128;
 
 /// A linear 28-bit address, NOT a packed four-byte hex address.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(try_from = "u32")]
 pub struct Address(u32);
+impl TryFrom<u32> for Address {
+    type Error = anyhow::Error;
+
+    fn try_from(linear: u32) -> Result<Self> {
+        Self::new(linear)
+    }
+}
 impl Address {
     pub fn new(linear: u32) -> Result<Self> {
         ensure!(linear < (1 << 28), "address exceeds 28 bits");
@@ -260,6 +268,18 @@ mod tests {
                 0xf0, 0x41, 16, 1, 5, 7, 0x11, 0x20, 0, 0, 0, 0, 0, 0, 16, 0x50, 0xf7
             ]
         );
+    }
+    #[test]
+    fn deserialized_addresses_obey_the_wire_address_limit() {
+        for value in [0, 127, (1 << 28) - 1] {
+            let address: Address = serde_json::from_str(&value.to_string()).unwrap();
+            assert_eq!(address, Address::new(value).unwrap());
+            assert_eq!(Address::from_bytes(address.bytes()).unwrap(), address);
+            assert_eq!(serde_json::to_string(&address).unwrap(), value.to_string());
+        }
+        for value in [1 << 28, u32::MAX] {
+            assert!(serde_json::from_str::<Address>(&value.to_string()).is_err());
+        }
     }
     #[test]
     fn carry_is_base128() {

@@ -106,6 +106,124 @@ fn backup(s: &Schema) -> Backup {
     }
 }
 #[test]
+fn stale_channel_reply_cannot_make_preview_use_panel_as_scratch() {
+    let schema = Schema::load();
+    let mut s = session(); // Actual channel is PANEL (zero-initialized memory).
+    s.transport.incoming.push_back(
+        Message::Data {
+            device: 16,
+            address: Address::new(0).unwrap(),
+            data: vec![0, 1], // A previous channel notification still waiting in input.
+        }
+        .encode()
+        .unwrap(),
+    );
+    s.preview(&schema, &Patch::new(&schema).unwrap()).unwrap();
+    let select = s
+        .transport
+        .sent
+        .iter()
+        .position(|m| {
+            matches!(m,
+                Message::Data { address, data, .. }
+                if *address == Address::packed(0x7f000100).unwrap() && data == &[0, 1]
+            )
+        })
+        .expect("PANEL must be left before preview writes");
+    let first_patch = s
+        .transport
+        .sent
+        .iter()
+        .position(|m| {
+            matches!(m,
+                Message::Data { address, .. } if *address == Address::packed(0x20000000).unwrap()
+            )
+        })
+        .unwrap();
+    assert!(select < first_patch);
+    assert_eq!(s.transport.bytes[&1], 1);
+}
+
+#[test]
+fn stale_read_cannot_bypass_system_conflict_detection() {
+    let schema = Schema::load();
+    let before = schema.defaults("SYSTEM").unwrap();
+    let mut after = before.clone();
+    after.get_mut("SYSTEM%USB_COM").unwrap()[2] = 73;
+    let mut s = session();
+    let address = schema
+        .block("SYSTEM%USB_COM")
+        .unwrap()
+        .address()
+        .plus(2)
+        .unwrap();
+    s.transport.bytes.insert(address.linear(), 65);
+    s.transport.incoming.push_back(
+        Message::Data {
+            device: 16,
+            address,
+            data: vec![before["SYSTEM%USB_COM"][2]],
+        }
+        .encode()
+        .unwrap(),
+    );
+    assert!(s.apply_system(&schema, &before, &after).is_err());
+    assert!(
+        s.transport
+            .sent
+            .iter()
+            .all(|m| matches!(m, Message::Request { .. }))
+    );
+    assert_eq!(s.transport.bytes[&address.linear()], 65);
+}
+
+#[test]
+fn stale_export_ack_cannot_report_a_new_save_as_successful() {
+    let schema = Schema::load();
+    let mut s = session();
+    s.transport.drop_export_ack = true;
+    s.transport.incoming.push_back(
+        Message::Data {
+            device: 16,
+            address: Address::packed(0x7f01010a).unwrap(),
+            data: vec![0],
+        }
+        .encode()
+        .unwrap(),
+    );
+    assert!(
+        s.store_patch(&schema, &Patch::new(&schema).unwrap(), 1)
+            .is_err()
+    );
+    assert_eq!(
+        s.transport
+            .sent
+            .iter()
+            .filter(|m| matches!(m,
+                Message::Data { address, .. } if *address == Address::packed(0x7f01010a).unwrap()
+            ))
+            .count(),
+        1
+    );
+    assert!(matches!(s.transport.sent.last().unwrap(),
+        Message::Data { address, data, .. }
+        if *address == Address::packed(0x7f010109).unwrap() && data == &[0]
+    ));
+}
+
+#[test]
+fn saturated_input_aborts_before_sending_a_command() {
+    let mut s = session();
+    // Invalid traffic is bounded too, even though it is not retained as updates.
+    s.transport.incoming = vec![vec![0]; 1024].into();
+    assert!(
+        s.command_ack(Address::packed(0x7f000104).unwrap(), vec![0, 1])
+            .is_err()
+    );
+    assert!(s.transport.sent.is_empty());
+}
+
+#[test]
 fn system_changes_are_validated_checked_and_read_back() {
     let schema = Schema::load();
     let before = schema.defaults("SYSTEM").unwrap();

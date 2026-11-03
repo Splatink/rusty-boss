@@ -80,8 +80,10 @@ impl Patch {
     }
     pub fn rename(&mut self, schema: &Schema, name: &str) -> Result<()> {
         let p = &schema.block("PATCH%COM")?.parameters[0];
-        self.parameters
-            .insert("PATCH%COM".into(), p.encode_text(name)?);
+        let encoded = p.encode_text(name)?;
+        let data = self.parameters.entry("PATCH%COM".into()).or_default();
+        data.resize(data.len().max(p.offset + p.width), 32);
+        data[p.offset..p.offset + p.width].copy_from_slice(&encoded);
         Ok(())
     }
     /// Match the vendor loader's tail-fill behavior, but report it to the caller.
@@ -255,6 +257,33 @@ mod tests {
         );
         let raw = fs::read_to_string(path).unwrap();
         assert!(raw.contains("\"32\""));
+    }
+    #[test]
+    fn rename_preserves_future_bytes_and_rejects_invalid_names_without_mutation() {
+        let schema = Schema::load();
+        let mut patch = Patch::new(&schema).unwrap();
+        patch
+            .parameters
+            .get_mut("PATCH%COM")
+            .unwrap()
+            .extend([1, 2, 127]);
+        patch.rename(&schema, "New name").unwrap();
+        assert_eq!(patch.name(), "New name");
+        assert_eq!(&patch.parameters["PATCH%COM"][16..], &[1, 2, 127]);
+        let before = patch.parameters.clone();
+        assert!(
+            patch
+                .rename(&schema, "A name longer than sixteen characters")
+                .is_err()
+        );
+        assert_eq!(patch.parameters, before);
+
+        patch.parameters.remove("PATCH%COM");
+        assert!(patch.rename(&schema, "非ASCII").is_err());
+        assert!(!patch.parameters.contains_key("PATCH%COM"));
+        patch.rename(&schema, "Short").unwrap();
+        assert_eq!(patch.parameters["PATCH%COM"].len(), 16);
+        assert_eq!(patch.name(), "Short");
     }
     #[test]
     fn reject_bad_bytes() {

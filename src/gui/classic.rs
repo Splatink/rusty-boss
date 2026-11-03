@@ -353,12 +353,52 @@ impl App {
                 .and_then(|s| c.value(&self.schema, s).ok())
                 .unwrap_or(0)
                 != 0;
-            let button = egui::Button::new(if on { "●  ON" } else { "○  OFF" }).fill(if on {
-                ui.visuals().selection.bg_fill
-            } else {
-                ui.visuals().widgets.inactive.bg_fill
+            // Draw the power symbol instead of relying on font glyph coverage.
+            let button = egui::Button::new("").min_size(vec2(78., 30.)).selected(on);
+            let response = ui.add_enabled(!self.blocking_operation(), button);
+            response.widget_info(|| {
+                egui::WidgetInfo::selected(
+                    egui::Role::Button,
+                    response.enabled(),
+                    on,
+                    format!("{} {}", section.label(), if on { "on" } else { "off" }),
+                )
             });
-            if ui.add_enabled(!self.blocking_operation(), button).clicked() {
+            let ink = if on {
+                ui.visuals().selection.stroke.color
+            } else {
+                ui.style().interact(&response).fg_stroke.color
+            };
+            let center = egui::pos2(response.rect.left() + 17., response.rect.center().y);
+            let points = (0..=24)
+                .map(|i| {
+                    let angle = -std::f32::consts::FRAC_PI_2
+                        + 0.65
+                        + i as f32 / 24. * (std::f32::consts::TAU - 1.3);
+                    center + vec2(angle.cos(), angle.sin()) * 6.
+                })
+                .collect();
+            ui.painter()
+                .add(egui::Shape::line(points, Stroke::new(1.7, ink)));
+            ui.painter().line_segment(
+                [center + vec2(0., -8.), center + vec2(0., -1.)],
+                Stroke::new(1.7, ink),
+            );
+            ui.painter().text(
+                egui::pos2(response.rect.left() + 32., center.y),
+                egui::Align2::LEFT_CENTER,
+                if on { "ON" } else { "OFF" },
+                egui::FontId::proportional(12.),
+                ink,
+            );
+            if response
+                .on_hover_text(format!(
+                    "Turn {} {}",
+                    section.label(),
+                    if on { "off" } else { "on" }
+                ))
+                .clicked()
+            {
                 self.set_control(&c, i32::from(!on));
             }
         }

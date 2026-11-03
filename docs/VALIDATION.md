@@ -1,5 +1,45 @@
 # Local validation results
 
+## 1.1.0 UI improvements
+
+- `cargo test --locked`: 116 passed (102 unit/UI and 14 integration tests).
+- `cargo test --lib --no-default-features --features gui`: 84 passed.
+- `cargo fmt --all -- --check`: passed.
+- Default and GUI-only `cargo clippy --locked --all-targets -- -D warnings`:
+  passed (GUI-only uses `--no-default-features --features gui`).
+- New offline regressions cover case-insensitive name/note search, stable tone
+  indices and selection, collection-switch search reset, empty results and
+  visible save errors at minimum window size across all four themes.
+- Follow-up visual review: captured the actual GUI-only OpenGL renderer under
+  X11/Xwayland, with isolated config/data and MIDI compiled out. Inspected
+  [normal 1180×800](screenshots/ui-1.1/normal.png),
+  [compact 800×560 / 190 px sidebar](screenshots/ui-1.1/compact.png), and
+  [Justice light theme](screenshots/ui-1.1/justice.png). Sidebar controls fit;
+  power symbols are visible on the effect switches in both themes. Compact
+  editor content remains vertically scrollable.
+- A new width regression checks long collection/tone names and sidebar controls
+  across all four themes. The existing large-liveset test verifies that the
+  first tone and A1 drop target remain visible together at minimum window size.
+- No amplifier access, release packaging or hardware persistence testing.
+
+To repeat a visual capture (PPM output, convertible to PNG with ffmpeg):
+
+```sh
+cargo build --locked --no-default-features --features gui
+check_dir=$(mktemp -d)
+env -u WAYLAND_DISPLAY XDG_CONFIG_HOME="$check_dir/config" \
+  XDG_DATA_HOME="$check_dir/data" RUSTY_BOSS_SMOKE_TEST=1 \
+  RUSTY_BOSS_SMOKE_FRAMES=15 RUSTY_BOSS_COMPACT=1 \
+  RUSTY_BOSS_SCREENSHOT="$check_dir/compact.ppm" target/debug/rusty-boss
+ffmpeg -i "$check_dir/compact.ppm" "$check_dir/compact.png"
+```
+
+Omit `RUSTY_BOSS_COMPACT` for the normal size. Screenshots capture only the app's
+rendered viewport, not the desktop. Screenshot/compact options apply only in
+smoke mode.
+
+## Historical 1.0.0 migration
+
 The 1.0.0 migration was validated on 2026-10-19 in the supplied Linux workspace
 with Rust/Cargo **1.99.1**, edition **2024**, ALSA 1.2.16.1 and the updated locked
 dependency set. This records testing of Rusty Boss, not execution/behavioral

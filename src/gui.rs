@@ -364,6 +364,7 @@ struct App {
     system_page: usize,
     assign_controller: usize,
     selected: usize,
+    tone_query: String,
     page: Page,
     file: String,
     backup_file: String,
@@ -431,6 +432,7 @@ impl App {
             system_page: 0,
             assign_controller: 0,
             selected: 0,
+            tone_query: String::new(),
             page: Page::Editor,
             file: "my-tones.tsl".into(),
             backup_file: "katana-backup.alb".into(),
@@ -699,6 +701,11 @@ impl App {
                 }
             }
             Event::Slots(patches) => {
+                if self.library.data[0].len() + patches.len() > 1000 {
+                    self.disarm();
+                    self.log("Not enough room in this collection; choose another collection before copying channels");
+                    return;
+                }
                 for (slot, patch) in patches {
                     self.channel_names[slot] = Some(patch.name());
                     self.library.data[0].push(patch);
@@ -913,13 +920,15 @@ impl App {
                                 .map(|id| id.name)
                                 .unwrap_or("Offline"),
                         );
-                        if self.dirty {
-                            ui.label(
-                                RichText::new("● Saving locally…")
-                                    .color(self.theme.accent())
-                                    .size(11.),
-                            );
-                        }
+                        let (label, color) = if self.library_error.is_some() {
+                            ("Local save needs attention", ui.visuals().error_fg_color)
+                        } else if self.dirty {
+                            ("Local changes pending", self.theme.accent())
+                        } else {
+                            ("Saved locally", ui.visuals().weak_text_color())
+                        };
+                        ui.label(RichText::new(label).color(color).size(11.))
+                            .on_hover_text("Local library storage only; this does not indicate a save to the amplifier.");
                     });
                 });
                 ui.horizontal_wrapped(|ui| {
@@ -937,6 +946,27 @@ impl App {
                 });
             });
         egui::Panel::bottom("status").show(ui, |ui| {
+            if let Some(error) = self.library_error.clone() {
+                ui.colored_label(ui.visuals().error_fg_color, error);
+                ui.horizontal_wrapped(|ui| {
+                    if ui
+                        .add_enabled(!self.busy, egui::Button::new("Export collection…"))
+                        .clicked()
+                    {
+                        self.pick_file(true);
+                    }
+                    if ui
+                        .add_enabled(
+                            self.library_path.is_some(),
+                            egui::Button::new("Retry local save"),
+                        )
+                        .clicked()
+                    {
+                        self.persist_library();
+                    }
+                });
+                ui.separator();
+            }
             ui.horizontal_wrapped(|ui| {
                 if self.busy {
                     ui.spinner();
@@ -950,16 +980,52 @@ impl App {
             });
         });
     }
+    fn filtered_tones(&self) -> Vec<usize> {
+        let query = self.tone_query.trim().to_lowercase();
+        self.library.data[0]
+            .iter()
+            .enumerate()
+            .filter_map(|(i, p)| {
+                let notes = p.memo.get("memo").and_then(|v| v.as_str()).unwrap_or("");
+                (query.is_empty()
+                    || p.name().to_lowercase().contains(&query)
+                    || notes.to_lowercase().contains(&query))
+                .then_some(i)
+            })
+            .collect()
+    }
+    fn tone_search(&mut self, ui: &mut egui::Ui) {
+        ui.add(
+            egui::TextEdit::singleline(&mut self.tone_query)
+                .hint_text("Search tones…")
+                .desired_width(ui.available_width()),
+        )
+        .on_hover_text("Search tone names and notes in this collection");
+        ui.horizontal(|ui| {
+            let count = self.filtered_tones().len();
+            ui.small(format!("{count} of {} tones", self.library.data[0].len()));
+            if ui
+                .add_enabled(!self.tone_query.is_empty(), egui::Button::new("Clear"))
+                .clicked()
+            {
+                self.tone_query.clear();
+            }
+        });
+    }
     fn tone_list(&mut self, ui: &mut egui::Ui) {
         let mut next = None;
-        for (i, p) in self.library.data[0].iter().enumerate() {
+        let visible = self.filtered_tones();
+        for &i in &visible {
+            let p = &self.library.data[0][i];
             let r = ui.add_enabled(
                 !self.busy || self.previewing,
                 egui::Button::new(format!("{:02}   {}", i + 1, p.name()))
+                    .truncate()
                     .selected(self.channel_patch.is_none() && i == self.selected)
                     .sense(egui::Sense::click_and_drag())
                     .min_size(egui::vec2(ui.available_width(), 34.)),
             );
+            let r = r.on_hover_text(p.name());
             r.dnd_set_drag_payload(PatchDrag(p.clone()));
             if r.clicked() {
                 next = Some(i);
@@ -974,13 +1040,26 @@ impl App {
             self.choose_preset(i);
         }
         if self.library.data[0].is_empty() {
-            ui.weak("Import a TSL to add tones.");
+            ui.strong("This collection is empty");
+            ui.weak("Import a Gen 3 TSL, or create a new tone in Library.");
+        } else if visible.is_empty() {
+            ui.strong("No matching tones");
+            ui.weak("Try another name or note, or clear the search.");
         }
     }
     fn channel_cards(&mut self, ui: &mut egui::Ui) {
         ui.label(RichText::new("AMP CHANNELS").size(11.).strong());
         if self.connected.is_none() {
             ui.weak("Connect your amp in Settings to see its channels.");
+            if ui
+                .add_sized(
+                    [ui.available_width(), 32.],
+                    egui::Button::new("Connection settings").wrap(),
+                )
+                .clicked()
+            {
+                self.page = Page::Settings;
+            }
             return;
         }
         ui.small(match self.write_gate.access() {
@@ -1004,6 +1083,7 @@ impl App {
             };
             let r = ui.add(
                 egui::Button::new(title)
+                    .truncate()
                     .selected(self.channel_patch.is_some() && self.slot == slot)
                     .min_size(egui::vec2(ui.available_width(), 32.)),
             );
@@ -1038,8 +1118,10 @@ impl App {
         }
     }
     fn preset_sidebar(&mut self, ui: &mut egui::Ui) {
+        let compact_check = std::env::var_os("RUSTY_BOSS_SMOKE_TEST").is_some()
+            && std::env::var_os("RUSTY_BOSS_COMPACT").is_some();
         egui::Panel::left("presets")
-            .default_size(235.)
+            .default_size(if compact_check { 190. } else { 235. })
             .min_size(190.)
             .max_size(310.)
             .resizable(true)
@@ -1050,25 +1132,53 @@ impl App {
                         .strong()
                         .color(self.theme.accent()),
                 );
+                ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Wrap);
                 self.collection_picker(ui);
-                ui.small("Click to preview · Drag to save");
+                ui.small(if self.connected.is_none() {
+                    "Offline · Browse and edit local tones"
+                } else {
+                    match self.write_gate.access() {
+                        Access::ReadOnly => "Read-only · Click to browse locally",
+                        Access::EditBuffer => "Click to preview · Saved channels locked",
+                        Access::Persistent => "Click to preview · Drag to save",
+                    }
+                });
+                self.tone_search(ui);
                 // Keep the destination cards reachable even with a large imported liveset.
-                let height = (ui.available_height() * 0.34).clamp(100., 240.);
+                // Reserve room for file actions, channel guidance and at least
+                // PANEL + A1 at the minimum window height. The list can shrink
+                // to one row rather than pushing every drop target offscreen.
+                let height = (ui.available_height() - 260.).clamp(34., 240.);
                 egui::ScrollArea::vertical()
                     .id_salt("tone-list")
+                    .auto_shrink([false, true])
                     .max_height(height)
                     .show(ui, |ui| self.tone_list(ui));
-                ui.horizontal(|ui| {
-                    if ui.button("Import TSL…").clicked() {
-                        self.pick_file(false);
-                    }
-                    if ui.button("Export TSL…").clicked() {
-                        self.pick_file(true);
+                ui.columns(2, |columns| {
+                    for (column, (label, saving)) in columns
+                        .iter_mut()
+                        .zip([("Import…", false), ("Export…", true)])
+                    {
+                        if column
+                            .add_sized(
+                                [column.available_width(), 30.],
+                                egui::Button::new(label).truncate(),
+                            )
+                            .on_hover_text(if saving {
+                                "Export collection as Gen 3 TSL"
+                            } else {
+                                "Import Gen 3 TSL"
+                            })
+                            .clicked()
+                        {
+                            self.pick_file(saving);
+                        }
                     }
                 });
                 ui.separator();
                 egui::ScrollArea::vertical()
                     .id_salt("channel-list")
+                    .auto_shrink([false, true])
                     .show(ui, |ui| self.channel_cards(ui));
             });
     }
@@ -1362,27 +1472,21 @@ impl App {
                     };
                     ui.horizontal(|ui| {
                         ui.label(format!("{} · {}", slot_label(slot), patch.name()));
-                        if ui.button("Copy to library").clicked() {
+                        if ui
+                            .add_enabled(
+                                !self.busy && self.library.data[0].len() < 1000,
+                                egui::Button::new("Copy to library"),
+                            )
+                            .clicked()
+                        {
                             extract = Some(patch);
                         }
                     });
                 }
             }
         }
-        if let Some(mut p) = extract {
-            match p.complete(&self.schema) {
-                Ok(w) => {
-                    self.library.data[0].push(p);
-                    self.selected = self.library.data[0].len() - 1;
-                    self.dirty = true;
-                    self.disarm();
-                    self.log(format!(
-                        "Tone recovered ({} default-filled blocks)",
-                        w.len()
-                    ));
-                }
-                Err(e) => self.log(e.to_string()),
-            }
+        if let Some(p) = extract {
+            self.recover_backup_patch(p);
         }
         ui.small("Full restore requires a backup from this exact model and enabled amp writes. It replaces system settings, PANEL and all saved channels. Keep a separate known-good backup.");
     }
@@ -1603,6 +1707,18 @@ impl eframe::App for App {
                 .ok()
                 .and_then(|s| s.parse::<usize>().ok())
                 .unwrap_or(4);
+            if self.smoke_frames == 3
+                && let Some(path) = std::env::var_os("RUSTY_BOSS_SCREENSHOT")
+            {
+                ctx.request_screenshot(move |image| {
+                    use std::io::Write;
+                    let mut file = std::fs::File::create(path).expect("create screenshot");
+                    write!(file, "P6\n{} {}\n255\n", image.size[0], image.size[1]).unwrap();
+                    for pixel in &image.pixels {
+                        file.write_all(&pixel.to_array()[..3]).unwrap();
+                    }
+                });
+            }
             if self.smoke_frames >= frames {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Close);
             }
@@ -1635,11 +1751,18 @@ impl eframe::App for App {
     }
 }
 pub fn run() -> eframe::Result {
+    let size = if std::env::var_os("RUSTY_BOSS_SMOKE_TEST").is_some()
+        && std::env::var_os("RUSTY_BOSS_COMPACT").is_some()
+    {
+        [800., 560.]
+    } else {
+        [1180., 800.]
+    };
     eframe::run_native(
         "Rusty Boss",
         eframe::NativeOptions {
             viewport: egui::ViewportBuilder::default()
-                .with_inner_size([1180., 800.])
+                .with_inner_size(size)
                 .with_min_inner_size([800., 560.]),
             ..Default::default()
         },

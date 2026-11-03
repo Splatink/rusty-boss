@@ -120,8 +120,13 @@ mod tests {
             );
             Ok(())
         }
-        fn receive(&mut self, _: Duration) -> Result<Option<Vec<u8>>> {
-            Ok(self.replies.pop_front())
+        fn receive(&mut self, timeout: Duration) -> Result<Option<Vec<u8>>> {
+            // These are scripted responses to sends, not pre-existing input.
+            Ok(if timeout.is_zero() {
+                None
+            } else {
+                self.replies.pop_front()
+            })
         }
     }
     #[test]

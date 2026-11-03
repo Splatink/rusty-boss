@@ -1,6 +1,8 @@
 //! Offline UI/state tests. These never open a MIDI port or run a vendor app.
 #[path = "tests/advanced.rs"]
 mod advanced;
+#[path = "tests/browsing.rs"]
+mod browsing;
 use super::*;
 
 pub(super) fn run_ui(
@@ -181,7 +183,6 @@ fn fake_connected(app: &mut App) -> Receiver<Job> {
     });
     jobs
 }
-#[cfg(feature = "midi")]
 fn named(app: &App, name: &str) -> Patch {
     let mut p = Patch::new(&app.schema).unwrap();
     p.rename(&app.schema, name).unwrap();

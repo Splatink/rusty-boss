@@ -1,6 +1,101 @@
 use super::*;
 
 #[test]
+fn removing_earlier_tones_preserves_selection_and_deleted_selection_uses_next_tone() {
+    for moving in [false, true] {
+        let ctx = egui::Context::default();
+        let mut app = App::new(&ctx);
+        app.library.data[0] = ["One", "Two", "Three", "Four", "Five"]
+            .map(|name| named(&app, name))
+            .to_vec();
+        app.library.add(LiveSet::new("Destination")).unwrap();
+        app.library.active = 0;
+        app.target_set = 1;
+        app.selected = 2;
+        app.tone_selection = BTreeSet::from([0]);
+        if moving {
+            app.transfer_selected(true);
+            assert_eq!(app.library.sets[1].data[0][0].name(), "One");
+        } else {
+            app.delete_selected();
+        }
+        assert_eq!(app.selected, 1);
+        assert_eq!(app.library.data[0][app.selected].name(), "Three");
+        app.tone_selection = BTreeSet::from([0, 1]);
+        if moving {
+            app.transfer_selected(true);
+        } else {
+            app.delete_selected();
+        }
+        assert_eq!(app.selected, 0);
+        assert_eq!(app.library.data[0][app.selected].name(), "Four");
+        app.tone_selection = BTreeSet::from([0, 1]);
+        app.delete_selected();
+        assert!(app.library.data[0].is_empty());
+        assert_eq!(app.selected, 0);
+    }
+}
+
+#[test]
+fn copying_tones_does_not_shift_selection_and_failed_moves_leave_it_unchanged() {
+    let ctx = egui::Context::default();
+    let mut app = App::new(&ctx);
+    app.library.data[0] = ["One", "Two", "Three"]
+        .map(|name| named(&app, name))
+        .to_vec();
+    app.library.add(LiveSet::new("Destination")).unwrap();
+    app.library.active = 0;
+    app.target_set = 1;
+    app.selected = 2;
+    app.tone_selection = BTreeSet::from([0]);
+    app.transfer_selected(false);
+    assert_eq!(app.selected, 2);
+    app.tone_selection = BTreeSet::from([0, 99]);
+    app.transfer_selected(true);
+    assert_eq!(app.selected, 2);
+    assert_eq!(app.library.data[0].len(), 3);
+    assert_eq!(app.tone_selection, BTreeSet::from([0, 99]));
+}
+
+#[test]
+fn backup_recovery_respects_capacity_and_in_flight_work() {
+    let ctx = egui::Context::default();
+    let mut app = App::new(&ctx);
+    let patch = named(&app, "Recovered");
+    app.busy = true;
+    app.recover_backup_patch(patch.clone());
+    assert_eq!(app.library.data[0].len(), 1);
+    assert!(!app.dirty);
+    app.busy = false;
+    app.library.data[0].resize(999, patch.clone());
+    app.recover_backup_patch(patch.clone());
+    assert_eq!(app.library.data[0].len(), 1000);
+    assert_eq!(app.selected, 999);
+    app.dirty = false;
+    app.recover_backup_patch(patch);
+    assert_eq!(app.library.data[0].len(), 1000);
+    assert!(!app.dirty);
+    assert!(app.status.contains("Collection full"));
+}
+
+#[cfg(feature = "midi")]
+#[test]
+fn bulk_channel_results_cannot_overfill_a_collection() {
+    let ctx = egui::Context::default();
+    let mut app = App::new(&ctx);
+    let patch = named(&app, "Channel");
+    app.library.data[0].resize(999, patch.clone());
+    app.handle_event(Event::Slots(vec![(1, patch.clone()), (2, patch.clone())]));
+    assert_eq!(app.library.data[0].len(), 999);
+    assert!(!app.dirty);
+    assert!(app.channel_names.iter().all(Option::is_none));
+    app.handle_event(Event::Slots(vec![(1, patch)]));
+    assert_eq!(app.library.data[0].len(), 1000);
+    assert!(app.dirty);
+    assert_eq!(app.channel_names[1].as_deref(), Some("Channel"));
+}
+
+#[test]
 fn collections_autosave_without_export_and_switch_without_amp_traffic() {
     let ctx = egui::Context::default();
     let mut app = App::new(&ctx);

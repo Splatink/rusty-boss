@@ -72,6 +72,8 @@ change tone parameters or select a channel.
   library tones. In **Read-only**, switching is blocked with an explanation;
   clicking never silently copies a channel. Use **Copy amp sound** or the
   explicit channel-copy controls to add a library tone.
+- **Search My tones:** filter the current collection by name or notes. Search
+  ignores case, keeps your selected tone intact, and clears when you switch collections.
 - **Library:** automatically saved collections; rename, annotate, duplicate,
   reorder or delete tones. Open **Select & transfer tones** for multiselect,
   collection-to-collection copy/move and selected amp-channel import/export.
@@ -188,5 +190,5 @@ of the app's runtime.
 
 For contributors: [development](docs/DEVELOPMENT.md) · [supported features and gaps](docs/PARITY.md)
 · [technical investigation](docs/INVESTIGATION.md) · [preset workflow evidence](docs/PRESET-WORKFLOW.md)
-· [1.0.0 changes](CHANGELOG.md) · [release checklist](docs/RELEASE.md)
+· [1.1.0 changes](CHANGELOG.md) · [release checklist](docs/RELEASE.md)
 · [notices](NOTICE.md) · [GPLv3 licensing review](docs/LICENSE-REVIEW.md).

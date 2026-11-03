@@ -1,14 +1,15 @@
-# Rusty Boss 1.0.0 release checklist
+# Rusty Boss 1.1.0 release checklist
 
 ## Status
 
-The project version is **1.0.0** and the current stable Rust/dependency migration
-passes local technical validation. **Do not interpret this as unconditional
+The project version is **1.1.0**. The UI improvements pass offline tests and
+Clippy as recorded in [VALIDATION.md](VALIDATION.md). The dependency set is
+unchanged from 1.0.0; the historical migration checks below were not all rerun. **Do not interpret this as unconditional
 public-release clearance.** The remaining owner/provenance and hardware-validation
 gates below have not been completed. No release tag, upload or publication was
 performed by the agent.
 
-## Verified locally on 2026-10-19
+## Historical 1.0.0 checks — verified locally on 2026-10-19
 
 - Rust/Cargo 1.99.1, edition 2024; `rust-version` is a minimum, not a ceiling.
 - All direct crates at the latest stable crates.io release when checked, and no
@@ -66,7 +67,7 @@ cargo package --allow-dirty --locked --offline
 
 `--allow-dirty` is useful while validating this preparation; a published release
 should come from a reviewed clean commit. The source package is
-`target/package/rusty-boss-1.0.0.crate`. Do not publish directly from a dirty
+`target/package/rusty-boss-1.1.0.crate`. Do not publish directly from a dirty
 workspace or tar the parent workspace containing the vendor installers.
 
 For a Linux binary distribution, stage only the intended executable, README,

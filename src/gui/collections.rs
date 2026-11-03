@@ -48,6 +48,7 @@ impl App {
         self.disarm();
         self.library.active = index;
         self.selected = 0;
+        self.tone_query.clear();
         self.tone_selection.clear();
         self.pending_bulk.clear();
         self.dirty = true;
@@ -56,7 +57,8 @@ impl App {
         let mut index = self.library.active;
         ui.add_enabled_ui(!self.busy, |ui| {
             egui::ComboBox::from_id_salt("collection-picker")
-                .width(180.)
+                .width(ui.available_width().min(180.))
+                .truncate()
                 .selected_text(&self.library.name)
                 .show_ui(ui, |ui| {
                     for (i, set) in self.library.sets.iter().enumerate() {
@@ -69,9 +71,6 @@ impl App {
         }
     }
     pub(super) fn collection_tools(&mut self, ui: &mut egui::Ui) {
-        if let Some(error) = self.library_error.clone() {
-            ui.colored_label(ui.visuals().error_fg_color, error);
-        }
         ui.horizontal_wrapped(|ui| {
             self.collection_picker(ui);
             if ui
@@ -129,6 +128,7 @@ impl App {
         {
             return;
         }
+        self.selected -= self.tone_selection.range(..self.selected).count();
         for i in self.tone_selection.iter().rev() {
             self.library.data[0].remove(*i);
         }
@@ -138,6 +138,50 @@ impl App {
             .min(self.library.data[0].len().saturating_sub(1));
         self.dirty = true;
         self.disarm();
+    }
+    pub(super) fn transfer_selected(&mut self, moving: bool) {
+        if self.busy {
+            return;
+        }
+        match self
+            .library
+            .transfer(&self.tone_selection, self.target_set, moving)
+        {
+            Ok(()) => {
+                if moving {
+                    self.selected -= self.tone_selection.range(..self.selected).count();
+                }
+                self.tone_selection.clear();
+                self.selected = self
+                    .selected
+                    .min(self.library.data[0].len().saturating_sub(1));
+                self.dirty = true;
+                self.disarm();
+            }
+            Err(e) => self.log(e.to_string()),
+        }
+    }
+    pub(super) fn recover_backup_patch(&mut self, mut patch: Patch) {
+        if self.busy {
+            return;
+        }
+        if self.library.data[0].len() >= 1000 {
+            self.log("Collection full; choose another collection before recovering a tone");
+            return;
+        }
+        match patch.complete(&self.schema) {
+            Ok(warnings) => {
+                self.library.data[0].push(patch);
+                self.selected = self.library.data[0].len() - 1;
+                self.dirty = true;
+                self.disarm();
+                self.log(format!(
+                    "Tone recovered ({} default-filled blocks)",
+                    warnings.len()
+                ));
+            }
+            Err(e) => self.log(e.to_string()),
+        }
     }
     pub(super) fn request_bulk_save(&mut self) {
         if self.busy
@@ -191,10 +235,7 @@ impl App {
                 let enabled = !self.tone_selection.is_empty() && self.target_set != self.library.active;
                 for (label,moving) in [("Copy to collection",false),("Move to collection",true)] {
                     if ui.add_enabled(enabled,egui::Button::new(label)).clicked() {
-                        match self.library.transfer(&self.tone_selection,self.target_set,moving) {
-                            Ok(()) => { self.tone_selection.clear(); self.selected = self.selected.min(self.library.data[0].len().saturating_sub(1)); self.dirty = true; self.disarm(); }
-                            Err(e) => self.log(e.to_string()),
-                        }
+                        self.transfer_selected(moving);
                     }
                 }
                 if ui.add_enabled(!self.tone_selection.is_empty(),egui::Button::new("Delete selected…")).clicked() { self.confirm = Some("delete-selected".into()); }

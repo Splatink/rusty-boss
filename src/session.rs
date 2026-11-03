@@ -12,6 +12,9 @@ use std::{
 
 pub trait Transport {
     fn send(&mut self, bytes: &[u8]) -> Result<()>;
+    /// Receive one frame, waiting at most `timeout`. A zero timeout must poll
+    /// already-available input without waiting; `None` means no complete frame
+    /// is currently available, not merely that the timeout has elapsed.
     fn receive(&mut self, timeout: Duration) -> Result<Option<Vec<u8>>>;
     fn wait(&mut self, duration: Duration) -> Result<()> {
         std::thread::sleep(duration);
@@ -111,6 +114,7 @@ impl<T: Transport> Session<T> {
     }
     pub fn read(&mut self, address: Address, size: usize) -> Result<Vec<u8>> {
         let mut read = ReadBuffer::new(address, size)?;
+        self.drain_pending()?;
         self.transport.send(
             &Message::Request {
                 device: self.identity.device,
@@ -135,6 +139,25 @@ impl<T: Transport> Session<T> {
                 let overlaps = a.linear() < address.linear() + size as u32
                     && a.linear() as u64 + data.len() as u64 > address.linear() as u64;
                 if overlaps {
+                    // A notification can straddle the requested range. Consume only
+                    // the requested bytes; preserve both outside portions for watchers.
+                    let start = a.linear();
+                    let end = start + data.len() as u32;
+                    let requested_end = address.linear() + size as u32;
+                    if start < address.linear() {
+                        self.retain_update(Message::Data {
+                            device,
+                            address: a,
+                            data: data[..(address.linear() - start) as usize].to_vec(),
+                        })?;
+                    }
+                    if end > requested_end {
+                        self.retain_update(Message::Data {
+                            device,
+                            address: Address::new(requested_end)?,
+                            data: data[(requested_end - start) as usize..].to_vec(),
+                        })?;
+                    }
                     if read.accept(a, data)? {
                         return Ok(read.bytes);
                     }
@@ -502,6 +525,7 @@ impl<T: Transport> Session<T> {
         bail!("channel selection was not confirmed; hardware state unknown")
     }
     fn command_ack(&mut self, address: Address, data: Vec<u8>) -> Result<()> {
+        self.drain_pending()?;
         self.dt1(address, data)?;
         let deadline = Instant::now() + self.timeout;
         while Instant::now() < deadline {
@@ -543,6 +567,23 @@ impl<T: Transport> Session<T> {
             let _ = self.dt1(Address::packed(0x7f010109)?, vec![0]);
         }
         result
+    }
+    /// Packets already waiting before a request/command cannot acknowledge it.
+    /// Preserve notifications, but fail closed if the stream cannot be drained.
+    /// SysEx has no transaction ID: replies arriving late *after* a new send
+    /// remain indistinguishable, so failed operations must never be retried blindly.
+    fn drain_pending(&mut self) -> Result<()> {
+        for _ in 0..1024 {
+            let Some(frame) = self.transport.receive(Duration::ZERO)? else {
+                return Ok(());
+            };
+            if let Ok(m @ Message::Data { device, .. }) = Message::decode(&frame)
+                && (device == self.identity.device || device == 127)
+            {
+                self.retain_update(m)?;
+            }
+        }
+        bail!("Device input backlog full; reconnect to resynchronize")
     }
     fn retain_update(&mut self, m: Message) -> Result<()> {
         ensure!(
@@ -606,8 +647,14 @@ mod tests {
             self.sent.push(b.to_vec());
             Ok(())
         }
-        fn receive(&mut self, _: Duration) -> Result<Option<Vec<u8>>> {
-            Ok(self.incoming.pop_front())
+        fn receive(&mut self, timeout: Duration) -> Result<Option<Vec<u8>>> {
+            // Scripted replies become available only when waiting for a response,
+            // not during the pre-send drain. Memory tests model queued stale input.
+            Ok(if timeout.is_zero() {
+                None
+            } else {
+                self.incoming.pop_front()
+            })
         }
         fn wait(&mut self, _: Duration) -> Result<()> {
             Ok(())
@@ -650,6 +697,35 @@ mod tests {
             frame(127, a, vec![1]),
         ]));
         assert_eq!(s.read(a, 2).unwrap(), [1, 2]);
+        assert_eq!(s.transport.sent.len(), 1);
+    }
+    #[test]
+    fn overlapping_reply_preserves_notifications_on_both_sides() {
+        let address = Address::packed(0x20000600).unwrap();
+        let frame = Message::Data {
+            device: 16,
+            address,
+            data: vec![10, 20, 30, 40],
+        }
+        .encode()
+        .unwrap();
+        let mut s = offline_session(VecDeque::from([frame]));
+        assert_eq!(s.read(address.plus(1).unwrap(), 2).unwrap(), [20, 30]);
+        assert_eq!(
+            s.take_updates(),
+            vec![
+                Message::Data {
+                    device: 16,
+                    address,
+                    data: vec![10]
+                },
+                Message::Data {
+                    device: 16,
+                    address: address.plus(3).unwrap(),
+                    data: vec![40]
+                },
+            ]
+        );
         assert_eq!(s.transport.sent.len(), 1);
     }
     #[test]

@@ -1,6 +1,24 @@
 # Changelog
 
-## Unreleased
+## 1.1.0
+
+### Improved
+
+- Search the active collection by tone name or notes, with case-insensitive
+  matching, result counts, a Clear action and helpful empty states. Filtering
+  preserves tone selection and drag-save identity; switching collections clears it.
+- Sidebar guidance now reflects offline, read-only, preview and write-enabled
+  states. Offline channel cards link directly to connection settings.
+- Local-save status distinguishes pending changes from errors. Save failures stay
+  visible on every page, with collection export and local-save retry actions.
+- Sidebar controls stay within their available width: bounded collection/tone
+  labels, full-width search and equal-width import/export actions. Short windows
+  reserve room for channel drop targets instead of letting long lists hide them.
+- Effect switches use drawn power icons with ON/OFF text and accessible labels,
+  avoiding dependence on font symbol coverage.
+- Offline UI regressions cover searching, collection switching, narrow layouts
+  and error states across all four themes. Rendered screenshots were visually
+  checked at normal/minimum sizes and in both dark and light themes.
 
 ### Fixed
 
